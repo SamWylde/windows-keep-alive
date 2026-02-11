@@ -20,7 +20,8 @@ if (args.Length > 0)
 
         case "--update-password":
             RequireAdmin("--update-password");
-            AutoLogonConfigurator.UpdatePassword();
+            var passwordUpdateResult = AutoLogonConfigurator.UpdatePassword();
+            Environment.Exit(passwordUpdateResult ? 0 : 1);
             return;
 
         case "--uninstall":

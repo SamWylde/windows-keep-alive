@@ -49,9 +49,10 @@ public static class SetupManager
         Console.WriteLine();
         Console.WriteLine("=== Post-Setup Verification ===");
         var complianceResult = ComplianceChecker.RunCheck();
-        if (complianceResult != 0 && _criticalFailures == 0)
+        if (complianceResult != 0)
         {
-            WriteWarning("Some compliance checks failed - review the results above");
+            WriteError("Post-setup verification failed. The system is not fully compliant.");
+            _criticalFailures++;
         }
 
         // Summary - conditional on success/failure
@@ -165,12 +166,25 @@ public static class SetupManager
             using var key = Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
             var edition = key?.GetValue("EditionID") as string ?? "Unknown";
+            var buildString = key?.GetValue("CurrentBuildNumber") as string ?? "0";
+
+            if (!int.TryParse(buildString, out var buildNumber))
+            {
+                WriteError($"Could not parse Windows build number: {buildString}");
+                return false;
+            }
+
+            if (buildNumber < 22000)
+            {
+                WriteError($"Windows build {buildNumber} detected. This tool requires Windows 11 (build 22000+).");
+                return false;
+            }
 
             if (edition.Contains("Pro", StringComparison.OrdinalIgnoreCase) ||
                 edition.Contains("Enterprise", StringComparison.OrdinalIgnoreCase) ||
                 edition.Contains("Education", StringComparison.OrdinalIgnoreCase))
             {
-                WriteSuccess($"Windows Edition: {edition}");
+                WriteSuccess($"Windows Edition: {edition} (Build {buildNumber})");
                 return true;
             }
             else
@@ -179,10 +193,10 @@ public static class SetupManager
                 return false;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            WriteWarning("Could not determine Windows edition");
-            return true; // Continue anyway
+            WriteError($"Could not determine Windows requirements: {ex.Message}");
+            return false;
         }
     }
 

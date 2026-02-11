@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -31,11 +30,13 @@ public static class AutoLogonConfigurator
     /// <summary>
     /// Standalone mode for --update-password: only re-prompts for credentials and re-runs Autologon.
     /// </summary>
-    public static void UpdatePassword()
+    public static bool UpdatePassword()
     {
+        _failures = 0;
         Console.WriteLine();
         Console.WriteLine("=== Update Auto-Login Password ===");
         ConfigureAutoLogon();
+        return _failures == 0;
     }
 
     private static void DisableWindowsHelloRequirement()
@@ -214,7 +215,7 @@ public static class AutoLogonConfigurator
         }
 
         // Verify configuration
-        VerifyAutoLogon(username);
+        VerifyAutoLogon(username, domain);
     }
 
     private static string? DownloadAutologon()
@@ -260,26 +261,45 @@ public static class AutoLogonConfigurator
     {
         try
         {
-            var cert = X509Certificate.CreateFromSignedFile(filePath);
-            var subject = cert.Subject;
+            var escapedPath = filePath.Replace("'", "''");
+            var verificationScript =
+                "$sig = Get-AuthenticodeSignature -FilePath '" + escapedPath + "'; " +
+                "$subj = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }; " +
+                "if ($sig.Status -eq 'Valid' -and $subj -like '*Microsoft Corporation*') { Write-Output 'VALID'; exit 0 } " +
+                "else { Write-Output ($sig.Status.ToString() + '|' + $subj); exit 1 }";
 
-            if (subject.Contains("Microsoft", StringComparison.OrdinalIgnoreCase))
+            var psi = new ProcessStartInfo
             {
-                WriteSuccess("Autologon64.exe signature verified (Microsoft)");
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{verificationScript}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(psi);
+            process?.WaitForExit(30_000);
+            var output = process?.StandardOutput.ReadToEnd()?.Trim() ?? "";
+            var error = process?.StandardError.ReadToEnd()?.Trim() ?? "";
+
+            if (process?.ExitCode == 0 && output.Contains("VALID", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteSuccess("Autologon64.exe Authenticode signature verified (Valid, Microsoft Corporation)");
                 return true;
             }
-            else
-            {
-                WriteError($"Autologon64.exe is signed but NOT by Microsoft: {subject}");
-                Console.WriteLine("    The file may have been tampered with. Deleting it.");
-                try { File.Delete(filePath); } catch { }
-                return false;
-            }
+
+            WriteError($"Autologon64.exe signature verification failed: {output}");
+            if (!string.IsNullOrWhiteSpace(error))
+                Console.WriteLine($"    Error: {error}");
+            Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
+            try { File.Delete(filePath); } catch { }
+            return false;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            WriteError("Autologon64.exe has no valid digital signature or is corrupted.");
-            Console.WriteLine("    The file may have been tampered with. Deleting it.");
+            WriteError($"Autologon64.exe signature verification failed: {ex.Message}");
+            Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
             try { File.Delete(filePath); } catch { }
             return false;
         }
@@ -289,18 +309,18 @@ public static class AutoLogonConfigurator
     {
         try
         {
-            // Escape embedded double quotes in password to prevent argument parsing issues
-            var escapedPassword = password.Replace("\"", "\\\"");
-
             var psi = new ProcessStartInfo
             {
                 FileName = autologonPath,
-                Arguments = $"\"{username}\" \"{domain}\" \"{escapedPassword}\" /accepteula",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
+            psi.ArgumentList.Add(username);
+            psi.ArgumentList.Add(domain);
+            psi.ArgumentList.Add(password);
+            psi.ArgumentList.Add("/accepteula");
 
             using var process = Process.Start(psi);
             process?.WaitForExit(30_000);
@@ -332,7 +352,7 @@ public static class AutoLogonConfigurator
         }
     }
 
-    private static void VerifyAutoLogon(string expectedUsername)
+    private static void VerifyAutoLogon(string expectedUsername, string expectedDomain)
     {
         try
         {
@@ -343,18 +363,34 @@ public static class AutoLogonConfigurator
             if (autoAdminLogon != "1")
             {
                 WriteError($"Auto-login verification failed: AutoAdminLogon={autoAdminLogon ?? "(not set)"} (expected 1)");
+                _failures++;
                 return;
             }
 
             if (string.IsNullOrEmpty(defaultUserName))
             {
                 WriteError("Auto-login verification failed: DefaultUserName is not set");
+                _failures++;
                 return;
             }
 
-            if (!string.Equals(defaultUserName, expectedUsername, StringComparison.OrdinalIgnoreCase))
+            var acceptedUserNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                WriteWarning($"Auto-login user mismatch: configured={defaultUserName}, expected={expectedUsername}");
+                expectedUsername,
+                $"{expectedDomain}\\{expectedUsername}",
+            };
+            var atIndex = expectedUsername.IndexOf('@');
+            if (atIndex > 0)
+            {
+                var shortName = expectedUsername[..atIndex];
+                acceptedUserNames.Add(shortName);
+                acceptedUserNames.Add($"{expectedDomain}\\{shortName}");
+            }
+
+            if (!acceptedUserNames.Contains(defaultUserName))
+            {
+                WriteWarning($"Auto-login user mismatch: configured={defaultUserName}, expected one of [{string.Join(", ", acceptedUserNames)}]");
+                _failures++;
                 return;
             }
 
