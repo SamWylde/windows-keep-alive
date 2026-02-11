@@ -9,12 +9,14 @@ public static class ComplianceChecker
     private static int _passCount;
     private static int _failCount;
     private static int _warnCount;
+    private static bool _isHomeOrCore;
 
     public static int RunCheck()
     {
         _passCount = 0;
         _failCount = 0;
         _warnCount = 0;
+        _isHomeOrCore = false;
 
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -47,31 +49,30 @@ public static class ComplianceChecker
         Console.WriteLine();
         Console.WriteLine("--- System ---");
 
-        try
-        {
-            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            var edition = key?.GetValue("EditionID") as string ?? "Unknown";
-            var productName = key?.GetValue("ProductName") as string ?? "Unknown";
-            var build = key?.GetValue("CurrentBuildNumber") as string ?? "Unknown";
-            var isBuildNumber = int.TryParse(build, out var buildNumber);
-
-            if (!isBuildNumber || buildNumber < 22000)
-            {
-                Fail($"Windows build: {build} - requires Windows 11 build 22000+");
-                return;
-            }
-
-            if (!productName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
-            {
-                Fail($"Windows product: {productName} - requires Windows 11");
-                return;
-            }
-
-            Pass($"Windows Edition: {edition} ({productName}, Build {buildNumber})");
-        }
-        catch
+        if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _)
+            || info == null)
         {
             Fail("Could not determine Windows edition");
+            return;
+        }
+
+        if (info.BuildNumber < 22000)
+        {
+            Fail($"Windows build: {info.BuildNumber} - requires Windows 11 build 22000+");
+            return;
+        }
+
+        if (!info.ProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+        {
+            Fail($"Windows product: {info.ProductName} - requires Windows 11");
+            return;
+        }
+
+        _isHomeOrCore = info.IsHomeOrCore;
+        Pass($"Windows Edition: {info.EditionId} ({info.ProductName}, Build {info.BuildNumber})");
+        if (_isHomeOrCore)
+        {
+            Warn("Windows Home/Core detected: policy registry checks may pass even when OS enforcement differs.");
         }
     }
 
@@ -79,6 +80,11 @@ public static class ComplianceChecker
     {
         Console.WriteLine();
         Console.WriteLine("--- Windows Update Policy ---");
+
+        if (_isHomeOrCore)
+        {
+            Warn("Home/Core note: NoAutoRebootWithLoggedOnUsers is a policy key and may not be strictly enforced.");
+        }
 
         CheckRegistryDword(Registry.LocalMachine,
             @"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU",
@@ -191,6 +197,11 @@ public static class ComplianceChecker
     {
         Console.WriteLine();
         Console.WriteLine("--- Lock Screen ---");
+
+        if (_isHomeOrCore)
+        {
+            Warn("Home/Core note: lock-screen and screen-saver policy keys may not be strictly enforced.");
+        }
 
         CheckRegistryDword(Registry.LocalMachine,
             @"SOFTWARE\Policies\Microsoft\Windows\Personalization",

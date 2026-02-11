@@ -16,9 +16,23 @@ public static class UpdatePolicyConfigurator
         Console.WriteLine();
         Console.WriteLine("=== Windows Update Policy ===");
 
+        WarnIfPolicyMayBeIgnoredOnHome();
+
         ConfigureRegistrySettings();
 
         return _failures == 0;
+    }
+
+    private static void WarnIfPolicyMayBeIgnoredOnHome()
+    {
+        if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _)
+            || info?.IsHomeOrCore != true)
+        {
+            return;
+        }
+
+        WriteWarning("Windows Home/Core detected: Windows Update policy values under HKLM\\SOFTWARE\\Policies may not be fully enforced.");
+        WriteWarning("Behavior will still depend on the OS update stack. Use compliance checks after reboot to validate runtime behavior.");
     }
 
     private static void ConfigureRegistrySettings()
@@ -86,6 +100,14 @@ public static class UpdatePolicyConfigurator
     {
         Console.ForegroundColor = ConsoleColor.Red;
         Console.Write("  [FAIL] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+
+    private static void WriteWarning(string message)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("  [WARN] ");
         Console.ResetColor();
         Console.WriteLine(message);
     }

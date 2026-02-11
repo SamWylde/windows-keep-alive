@@ -174,40 +174,31 @@ public static class SetupManager
 
     private static bool CheckWindowsEdition()
     {
-        try
+        if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out var error) || info == null)
         {
-            using var key = Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            var edition = key?.GetValue("EditionID") as string ?? "Unknown";
-            var productName = key?.GetValue("ProductName") as string ?? "Unknown";
-            var buildString = key?.GetValue("CurrentBuildNumber") as string ?? "0";
-
-            if (!int.TryParse(buildString, out var buildNumber))
-            {
-                WriteError($"Could not parse Windows build number: {buildString}");
-                return false;
-            }
-
-            if (buildNumber < 22000)
-            {
-                WriteError($"Windows build {buildNumber} detected. This tool requires Windows 11 (build 22000+).");
-                return false;
-            }
-
-            if (!productName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
-            {
-                WriteError($"Windows product '{productName}' detected. This tool requires Windows 11.");
-                return false;
-            }
-
-            WriteSuccess($"Windows Edition: {edition} ({productName}, Build {buildNumber})");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            WriteError($"Could not determine Windows requirements: {ex.Message}");
+            WriteError($"Could not determine Windows requirements: {error}");
             return false;
         }
+
+        if (info.BuildNumber < 22000)
+        {
+            WriteError($"Windows build {info.BuildNumber} detected. This tool requires Windows 11 (build 22000+).");
+            return false;
+        }
+
+        if (!info.ProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteError($"Windows product '{info.ProductName}' detected. This tool requires Windows 11.");
+            return false;
+        }
+
+        WriteSuccess($"Windows Edition: {info.EditionId} ({info.ProductName}, Build {info.BuildNumber})");
+        if (info.IsHomeOrCore)
+        {
+            WriteWarning("Windows Home/Core detected: some HKLM\\SOFTWARE\\Policies settings may be ignored by the OS.");
+        }
+
+        return true;
     }
 
     private static bool CheckTeamViewerInstalled()
@@ -351,10 +342,21 @@ public static class SetupManager
                     WriteWarning("Credential Guard appears to be enabled.");
                     Console.WriteLine("    Sysinternals Autologon may fail to store credentials.");
                     Console.WriteLine("    If auto-login doesn't work after setup, you may need to disable Credential Guard:");
-                    Console.WriteLine("    1. Run gpedit.msc");
-                    Console.WriteLine("    2. Computer Config > Admin Templates > System > Device Guard");
-                    Console.WriteLine("    3. Set 'Turn On Virtualization Based Security' to Disabled");
-                    Console.WriteLine("    4. Reboot");
+                    var isHomeOrCore = WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _) &&
+                                       info?.IsHomeOrCore == true;
+                    if (isHomeOrCore)
+                    {
+                        Console.WriteLine("    1. Home/Core note: gpedit.msc is typically unavailable.");
+                        Console.WriteLine("    2. Use Microsoft docs for disabling VBS/Credential Guard via registry/boot policy.");
+                        Console.WriteLine("    3. Reboot after applying those changes.");
+                    }
+                    else
+                    {
+                        Console.WriteLine("    1. Run gpedit.msc");
+                        Console.WriteLine("    2. Computer Config > Admin Templates > System > Device Guard");
+                        Console.WriteLine("    3. Set 'Turn On Virtualization Based Security' to Disabled");
+                        Console.WriteLine("    4. Reboot");
+                    }
                 }
                 else
                 {

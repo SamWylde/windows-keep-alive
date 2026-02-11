@@ -9,6 +9,9 @@ using KeepAliveService.Update;
 
 internal static class Program
 {
+    private const string GuiMutexName = @"Local\WindowsKeepAlive.Gui.Singleton";
+    private const string GuiActivationEventName = @"Local\WindowsKeepAlive.Gui.Activate";
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -71,6 +74,11 @@ internal static class Program
 
     private static int RunInteractiveGuiMode(string[] args)
     {
+        Mutex? singleInstanceMutex = null;
+        EventWaitHandle? activationEvent = null;
+        CancellationTokenSource? activationListenerCts = null;
+        Task? activationListenerTask = null;
+
         try
         {
             if (!IsRunningAsAdmin())
@@ -84,8 +92,16 @@ internal static class Program
                 return 0;
             }
 
+            if (!TryAcquireGuiMutex(out singleInstanceMutex))
+            {
+                SignalExistingGuiInstance();
+                return 0;
+            }
+
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainForm());
+            var form = new MainForm();
+            StartActivationListener(form, out activationEvent, out activationListenerCts, out activationListenerTask);
+            Application.Run(form);
             return 0;
         }
         catch (Exception ex)
@@ -96,6 +112,117 @@ internal static class Program
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             return 1;
+        }
+        finally
+        {
+            if (activationListenerCts != null)
+            {
+                activationListenerCts.Cancel();
+            }
+
+            if (activationListenerTask != null)
+            {
+                try
+                {
+                    activationListenerTask.Wait(1000);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+            }
+
+            activationEvent?.Dispose();
+            activationListenerCts?.Dispose();
+            singleInstanceMutex?.ReleaseMutex();
+            singleInstanceMutex?.Dispose();
+        }
+    }
+
+    private static bool TryAcquireGuiMutex(out Mutex? mutex)
+    {
+        mutex = null;
+
+        try
+        {
+            mutex = new Mutex(initiallyOwned: true, GuiMutexName, out var createdNew);
+            if (createdNew)
+            {
+                return true;
+            }
+
+            mutex.Dispose();
+            mutex = null;
+            return false;
+        }
+        catch
+        {
+            // If single-instance lock fails unexpectedly, continue instead of blocking startup.
+            mutex = null;
+            return true;
+        }
+    }
+
+    private static void SignalExistingGuiInstance()
+    {
+        try
+        {
+            if (EventWaitHandle.TryOpenExisting(GuiActivationEventName, out var existing))
+            {
+                using (existing)
+                {
+                    existing.Set();
+                }
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
+    private static void StartActivationListener(
+        MainForm form,
+        out EventWaitHandle? activationEvent,
+        out CancellationTokenSource? listenerCts,
+        out Task? listenerTask)
+    {
+        activationEvent = null;
+        listenerCts = null;
+        listenerTask = null;
+
+        try
+        {
+            var localActivationEvent = new EventWaitHandle(
+                initialState: false,
+                mode: EventResetMode.AutoReset,
+                name: GuiActivationEventName);
+            activationEvent = localActivationEvent;
+            listenerCts = new CancellationTokenSource();
+
+            var token = listenerCts.Token;
+            listenerTask = Task.Run(() =>
+            {
+                var waitHandles = new WaitHandle[] { localActivationEvent, token.WaitHandle };
+                while (true)
+                {
+                    var signaled = WaitHandle.WaitAny(waitHandles);
+                    if (signaled == 1)
+                    {
+                        return;
+                    }
+
+                    form.ActivateFromExternalLaunch();
+                }
+            }, token);
+        }
+        catch
+        {
+            activationEvent?.Dispose();
+            listenerCts?.Dispose();
+            activationEvent = null;
+            listenerCts = null;
+            listenerTask = null;
         }
     }
 

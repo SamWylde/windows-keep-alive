@@ -951,6 +951,44 @@ public sealed class MainForm : Form
         Activate();
     }
 
+    public void ActivateFromExternalLaunch()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke((System.Windows.Forms.MethodInvoker)ActivateFromExternalLaunch);
+            }
+            catch
+            {
+                // Best effort only.
+            }
+
+            return;
+        }
+
+        if (!Visible || !ShowInTaskbar || WindowState == FormWindowState.Minimized || _trayIcon.Visible)
+        {
+            RestoreFromTray();
+        }
+        else
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+        }
+
+        TopMost = true;
+        TopMost = false;
+        BringToFront();
+        Activate();
+        Focus();
+    }
+
     private void QueueCredentialPersistence()
     {
         if (_suppressCredentialPersistence)
