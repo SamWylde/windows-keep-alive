@@ -179,6 +179,7 @@ public static class SetupManager
             using var key = Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
             var edition = key?.GetValue("EditionID") as string ?? "Unknown";
+            var productName = key?.GetValue("ProductName") as string ?? "Unknown";
             var buildString = key?.GetValue("CurrentBuildNumber") as string ?? "0";
 
             if (!int.TryParse(buildString, out var buildNumber))
@@ -193,18 +194,14 @@ public static class SetupManager
                 return false;
             }
 
-            if (edition.Contains("Pro", StringComparison.OrdinalIgnoreCase) ||
-                edition.Contains("Enterprise", StringComparison.OrdinalIgnoreCase) ||
-                edition.Contains("Education", StringComparison.OrdinalIgnoreCase))
+            if (!productName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
             {
-                WriteSuccess($"Windows Edition: {edition} (Build {buildNumber})");
-                return true;
-            }
-            else
-            {
-                WriteError($"Windows Edition: {edition} - This tool requires Pro, Enterprise, or Education");
+                WriteError($"Windows product '{productName}' detected. This tool requires Windows 11.");
                 return false;
             }
+
+            WriteSuccess($"Windows Edition: {edition} ({productName}, Build {buildNumber})");
+            return true;
         }
         catch (Exception ex)
         {

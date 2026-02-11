@@ -15,7 +15,7 @@ It is designed to keep the machine online, keep auto-login configured, and keep 
 
 ## Requirements
 
-- Windows 11 Pro / Enterprise / Education
+- Windows 11 (Core/Home, Pro, Enterprise, or Education)
 - Administrator rights for setup/configuration
 - TeamViewer installed
 
@@ -39,6 +39,9 @@ It also creates a desktop shortcut named `Windows Keep Alive`.
 - `Status`: service status + compliance check + start/stop/restart service controls
 - `Updates`: current/latest version, release notes, update apply
 - `Logs`: view `C:\ProgramData\WindowsKeepAlive\app.log`
+
+Setup input fields are persisted between launches (username/account/domain/password).  
+Password is stored encrypted with Windows DPAPI.
 
 Credential testing and setup now adapt to Windows Hello/passwordless policy state:
 - If password sign-in appears blocked by policy, setup stops with remediation guidance.
