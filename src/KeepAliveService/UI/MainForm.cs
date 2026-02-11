@@ -24,6 +24,7 @@ public sealed class MainForm : Form
     private readonly TextBox _domainTextBox;
     private readonly TextBox _passwordTextBox;
     private readonly Button _runSetupButton;
+    private readonly Button _testCredentialsButton;
     private readonly Button _updatePasswordButton;
     private readonly Button _uninstallButton;
     private readonly Button _runCheckButton;
@@ -187,6 +188,14 @@ public sealed class MainForm : Form
         };
         _runSetupButton.Click += async (_, _) => await RunSetupAsync();
         setupButtonFlow.Controls.Add(_runSetupButton);
+
+        _testCredentialsButton = new Button
+        {
+            Text = "Test Credentials",
+            AutoSize = true,
+        };
+        _testCredentialsButton.Click += async (_, _) => await TestCredentialsAsync();
+        setupButtonFlow.Controls.Add(_testCredentialsButton);
 
         _updatePasswordButton = new Button
         {
@@ -398,6 +407,35 @@ public sealed class MainForm : Form
                 {
                     Console.WriteLine("[FAIL] Password update failed.");
                 }
+            });
+    }
+
+    private async Task TestCredentialsAsync()
+    {
+        if (!TryReadCredentials(out var credentials, out var validationError))
+        {
+            MessageBox.Show(validationError, "Invalid Input", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        await RunOperationAsync(
+            "Testing credentials",
+            async () =>
+            {
+                var result = await Task.Run(() => CredentialValidator.Validate(credentials!));
+                if (result.IsValid)
+                {
+                    Console.WriteLine($"[PASS] {result.Message}");
+                    Console.WriteLine("[INFO] This validates credentials only. Full auto-login still depends on policy and setup checks.");
+                    return;
+                }
+
+                Console.WriteLine($"[FAIL] {result.Message}");
+                MessageBox.Show(
+                    "Credential validation failed. Check username/account type/domain/password and try again.",
+                    "Credential Test Failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             });
     }
 
@@ -733,6 +771,7 @@ public sealed class MainForm : Form
     private void SetControlsEnabled(bool enabled)
     {
         _runSetupButton.Enabled = enabled;
+        _testCredentialsButton.Enabled = enabled;
         _updatePasswordButton.Enabled = enabled;
         _uninstallButton.Enabled = enabled;
         _runCheckButton.Enabled = enabled;

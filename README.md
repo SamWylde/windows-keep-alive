@@ -31,10 +31,11 @@ It is designed to keep the machine online, keep auto-login configured, and keep 
 5. Reboot once to validate auto-login behavior.
 
 On first launch, the app copies itself to `C:\Program Files\WindowsKeepAlive\` and relaunches from there so service registration and updates use a stable canonical path.
+It also creates a desktop shortcut named `Windows Keep Alive`.
 
 ## GUI Tabs
 
-- `Setup`: run full setup, update autologin password, uninstall service, view live output
+- `Setup`: run full setup, test credentials, update autologin password, uninstall service, view live output
 - `Status`: service status + compliance check
 - `Updates`: current/latest version, release notes, update apply
 - `Logs`: view `C:\ProgramData\WindowsKeepAlive\app.log`
