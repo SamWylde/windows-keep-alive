@@ -32,15 +32,15 @@ public static class UpdatePolicyConfigurator
         // Set Active Hours to maximum 18-hour range (midnight to 6 PM)
         SetRegistryDword(Registry.LocalMachine, UxSettingsPath,
             "ActiveHoursStart", 0,
-            "Active hours start → Midnight");
+            "Active hours start -> Midnight");
 
         SetRegistryDword(Registry.LocalMachine, UxSettingsPath,
             "ActiveHoursEnd", 18,
-            "Active hours end → 6 PM");
+            "Active hours end -> 6 PM");
 
         SetRegistryDword(Registry.LocalMachine, UxSettingsPath,
             "IsActiveHoursEnabled", 1,
-            "Active hours → Enabled");
+            "Active hours -> Enabled");
     }
 
     private static void DisableRebootScheduledTask()
@@ -62,7 +62,7 @@ public static class UpdatePolicyConfigurator
 
             if (process?.ExitCode == 0)
             {
-                WriteSuccess("UpdateOrchestrator\\Reboot task → Disabled");
+                WriteSuccess("UpdateOrchestrator\\Reboot task -> Disabled");
             }
             else
             {

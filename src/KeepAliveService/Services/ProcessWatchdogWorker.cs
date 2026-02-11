@@ -71,12 +71,14 @@ public class ProcessWatchdogWorker : BackgroundService
         // Check for TeamViewer service first (preferred - handles remote connections)
         if (IsTeamViewerServiceRunning())
         {
+            ClearFailures();
             return;
         }
 
         // Check for TeamViewer process as fallback (non-service installations)
         if (IsTeamViewerProcessRunning())
         {
+            ClearFailures();
             return;
         }
 
@@ -245,6 +247,15 @@ public class ProcessWatchdogWorker : BackgroundService
     private bool IsInCooldown()
     {
         return _failureTimestamps.Count >= MaxFailuresBeforeCooldown;
+    }
+
+    private void ClearFailures()
+    {
+        if (_failureTimestamps.Count > 0)
+        {
+            _failureTimestamps.Clear();
+            _cooldownUntil = DateTime.MinValue;
+        }
     }
 
     private static void DisposeAll(Process[] processes)

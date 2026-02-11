@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
 
@@ -14,98 +15,89 @@ public static class NetworkConfigurator
         // GUID 12bbebe6-... = Power Saving Mode (0 = Maximum Performance)
         RunPowerCfg(
             "/setacvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0",
-            "WiFi power saving (AC) → Maximum Performance");
+            "WiFi power saving (AC) -> Maximum Performance");
         RunPowerCfg(
             "/setdcvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a 0",
-            "WiFi power saving (DC) → Maximum Performance");
+            "WiFi power saving (DC) -> Maximum Performance");
 
         // Disable USB selective suspend
         // GUID 2a737441-... = USB Settings
         // GUID 48e6b7a6-... = USB Selective Suspend Setting (0 = Disabled)
         RunPowerCfg(
             "/setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",
-            "USB selective suspend (AC) → Disabled");
+            "USB selective suspend (AC) -> Disabled");
         RunPowerCfg(
             "/setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",
-            "USB selective suspend (DC) → Disabled");
+            "USB selective suspend (DC) -> Disabled");
 
         // Apply changes
         RunPowerCfg("/setactive SCHEME_CURRENT", "Applied network power settings");
 
-        // Try to disable WiFi adapter power management via netsh
-        DisableWifiPowerManagement();
+        // Disable WiFi adapter power management via registry (the real fix)
+        DisableAdapterPowerManagement();
     }
 
-    private static void DisableWifiPowerManagement()
+    private static void DisableAdapterPowerManagement()
     {
-        // Attempt to find the WiFi interface name and disable power save
+        // Disable "Allow the computer to turn off this device to save power" for all
+        // network adapters by setting PnPCapabilities = 0x18 (24) in the registry.
+        // This is the same setting as unchecking the box in Device Manager > Power Management.
         try
         {
-            var interfaceName = GetWifiInterfaceName();
-            if (interfaceName == null)
+            var adaptersFound = 0;
+            using var networkKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}");
+
+            if (networkKey == null)
             {
-                WriteWarning("No WiFi interface detected (may be using Ethernet only)");
+                WriteWarning("Could not open network adapter registry key");
                 return;
             }
 
-            // Use netsh to set power management - this sets the adapter-level power save
-            var psi = new ProcessStartInfo
+            foreach (var subKeyName in networkKey.GetSubKeyNames())
             {
-                FileName = "netsh.exe",
-                Arguments = $"wlan set autoconfig enabled=yes interface=\"{interfaceName}\"",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
+                // Skip non-numeric keys like "Properties"
+                if (!int.TryParse(subKeyName, out _))
+                    continue;
 
-            using var process = Process.Start(psi);
-            process?.WaitForExit(10_000);
+                using var adapterKey = networkKey.OpenSubKey(subKeyName, writable: true);
+                if (adapterKey == null) continue;
 
-            WriteSuccess($"WiFi auto-connect enabled for interface: {interfaceName}");
+                var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
+                var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
+
+                // Only target wireless/WiFi adapters
+                var isWireless = driverDesc.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
+                                 driverDesc.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                                 driverDesc.Contains("WLAN", StringComparison.OrdinalIgnoreCase) ||
+                                 componentId.Contains("wireless", StringComparison.OrdinalIgnoreCase) ||
+                                 componentId.Contains("wlan", StringComparison.OrdinalIgnoreCase);
+
+                if (!isWireless) continue;
+
+                adaptersFound++;
+
+                // PnPCapabilities: 0x18 (24) = disable power management
+                // 0x10 = PDCAP_D1_SUPPORTED (don't allow D1 state)
+                // 0x08 = PDCAP_D2_SUPPORTED (don't allow D2 state)
+                // Combined = disable OS power management for this device
+                adapterKey.SetValue("PnPCapabilities", 24, RegistryValueKind.DWord);
+                WriteSuccess($"Disabled power management for: {driverDesc}");
+            }
+
+            if (adaptersFound == 0)
+            {
+                WriteWarning("No WiFi adapters found in registry (may be using Ethernet only)");
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            WriteError("Cannot modify adapter power management - access denied (run as Administrator)");
         }
         catch (Exception ex)
         {
-            WriteWarning($"WiFi power management config: {ex.Message}");
+            WriteWarning($"Adapter power management: {ex.Message}");
         }
-    }
-
-    private static string? GetWifiInterfaceName()
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "netsh.exe",
-                Arguments = "wlan show interfaces",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            var output = process?.StandardOutput.ReadToEnd() ?? "";
-            process?.WaitForExit(10_000);
-
-            // Parse output for "Name : <interface name>"
-            foreach (var line in output.Split('\n'))
-            {
-                var trimmed = line.Trim();
-                if (trimmed.StartsWith("Name", StringComparison.OrdinalIgnoreCase) && trimmed.Contains(':'))
-                {
-                    var name = trimmed.Substring(trimmed.IndexOf(':') + 1).Trim();
-                    if (!string.IsNullOrEmpty(name))
-                        return name;
-                }
-            }
-        }
-        catch
-        {
-            // netsh may not be available or WLAN service not running
-        }
-
-        return null;
     }
 
     private static void RunPowerCfg(string arguments, string description)

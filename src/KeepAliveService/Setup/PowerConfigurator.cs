@@ -10,31 +10,31 @@ public static class PowerConfigurator
         Console.WriteLine("=== Power Settings ===");
 
         // Disable sleep timeouts (AC and DC)
-        RunPowerCfg("/change standby-timeout-ac 0", "Sleep timeout (AC) → Never");
-        RunPowerCfg("/change standby-timeout-dc 0", "Sleep timeout (DC) → Never");
+        RunPowerCfg("/change standby-timeout-ac 0", "Sleep timeout (AC) -> Never");
+        RunPowerCfg("/change standby-timeout-dc 0", "Sleep timeout (DC) -> Never");
 
         // Disable hibernate timeouts
-        RunPowerCfg("/change hibernate-timeout-ac 0", "Hibernate timeout (AC) → Never");
-        RunPowerCfg("/change hibernate-timeout-dc 0", "Hibernate timeout (DC) → Never");
+        RunPowerCfg("/change hibernate-timeout-ac 0", "Hibernate timeout (AC) -> Never");
+        RunPowerCfg("/change hibernate-timeout-dc 0", "Hibernate timeout (DC) -> Never");
 
         // Disable monitor timeout
-        RunPowerCfg("/change monitor-timeout-ac 0", "Monitor timeout (AC) → Never");
-        RunPowerCfg("/change monitor-timeout-dc 0", "Monitor timeout (DC) → Never");
+        RunPowerCfg("/change monitor-timeout-ac 0", "Monitor timeout (AC) -> Never");
+        RunPowerCfg("/change monitor-timeout-dc 0", "Monitor timeout (DC) -> Never");
 
         // Disable hibernation entirely
-        RunPowerCfg("/hibernate off", "Hibernation → Disabled");
+        RunPowerCfg("/hibernate off", "Hibernation -> Disabled");
 
         // Lid close action = Do Nothing (0)
-        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0", "Lid close on AC → Do Nothing");
-        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0", "Lid close on DC → Do Nothing");
+        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0", "Lid close on AC -> Do Nothing");
+        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0", "Lid close on DC -> Do Nothing");
 
         // Disable hybrid sleep
-        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0", "Hybrid sleep (AC) → Disabled");
-        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0", "Hybrid sleep (DC) → Disabled");
+        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0", "Hybrid sleep (AC) -> Disabled");
+        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP 0", "Hybrid sleep (DC) -> Disabled");
 
         // Disable console lock on wake (require sign-in after sleep)
-        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (AC) → Disabled");
-        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (DC) → Disabled");
+        RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (AC) -> Disabled");
+        RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (DC) -> Disabled");
 
         // Apply all changes
         RunPowerCfg("/setactive SCHEME_CURRENT", "Applied power scheme changes");

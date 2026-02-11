@@ -198,17 +198,28 @@ public static class ComplianceChecker
         Console.WriteLine();
         Console.WriteLine("--- Power Settings ---");
 
-        // Check sleep timeout via powercfg
-        CheckPowerCfgSetting("Sleep", "standby-timeout-ac", "0");
-        CheckPowerCfgSetting("Hibernate", "hibernate-timeout-ac", "0");
+        // Check sleep timeout via powercfg query
+        // SUB_SLEEP GUID = 238c9fa8-0aad-41ed-83f4-97be242c8f20
+        // STANDBYIDLE GUID = 29f6c1db-86da-48c5-9fdb-f2b67b1f44da
+        CheckPowerCfgValue("Sleep timeout (AC)", "238c9fa8-0aad-41ed-83f4-97be242c8f20", "29f6c1db-86da-48c5-9fdb-f2b67b1f44da", 0);
 
-        // Check if hibernate is off
+        // Check hibernate - use powercfg /hibernate to see if hiberfile exists
+        CheckHibernateDisabled();
+
+        // Check lid close action
+        // SUB_BUTTONS GUID = 4f971e89-eebd-4455-a8de-9e59040e7347
+        // LIDACTION GUID = 5ca83367-6e45-459f-a27b-476b1d01c936
+        CheckLidCloseAction();
+    }
+
+    private static void CheckPowerCfgValue(string name, string subgroupGuid, string settingGuid, int expectedValue)
+    {
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = "powercfg.exe",
-                Arguments = "/availablesleepstates",
+                Arguments = $"/query SCHEME_CURRENT {subgroupGuid} {settingGuid}",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true,
@@ -218,25 +229,86 @@ public static class ComplianceChecker
             var output = process?.StandardOutput.ReadToEnd() ?? "";
             process?.WaitForExit(10_000);
 
-            if (output.Contains("Hibernate", StringComparison.OrdinalIgnoreCase) &&
-                !output.Contains("not available", StringComparison.OrdinalIgnoreCase))
+            // Parse "Current AC Power Setting Index: 0x00000000"
+            var expectedHex = $"0x{expectedValue:x8}";
+            var acLine = output.Split('\n')
+                .FirstOrDefault(l => l.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase));
+
+            if (acLine != null && acLine.Contains(expectedHex, StringComparison.OrdinalIgnoreCase))
             {
-                // More nuanced: check if hibernate appears as available
-                // The output format varies, so check if it's in the "available" section
-                Warn("Hibernate may still be available - verify with 'powercfg /availablesleepstates'");
+                Pass($"{name} = {expectedValue} (Never)");
             }
             else
             {
-                Pass("Hibernate → Disabled");
+                var actual = acLine?.Trim().Split(':').LastOrDefault()?.Trim() ?? "(could not read)";
+                Fail($"{name} = {actual} (expected {expectedHex})");
             }
         }
         catch
         {
-            Warn("Could not check hibernate status");
+            Warn($"Could not check {name}");
         }
+    }
 
-        // Check lid close action
-        CheckLidCloseAction();
+    private static void CheckHibernateDisabled()
+    {
+        try
+        {
+            // Check if hibernate file exists - definitive test for hibernate being enabled
+            var hiberfilePath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows).Substring(0, 3),
+                "hiberfil.sys");
+
+            if (File.Exists(hiberfilePath))
+            {
+                Fail("Hibernate is enabled (hiberfil.sys exists)");
+            }
+            else
+            {
+                Pass("Hibernate disabled (no hiberfil.sys)");
+            }
+        }
+        catch
+        {
+            // Can't check file - fall back to powercfg
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powercfg.exe",
+                    Arguments = "/availablesleepstates",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                };
+
+                using var process = Process.Start(psi);
+                var output = process?.StandardOutput.ReadToEnd() ?? "";
+                process?.WaitForExit(10_000);
+
+                // Parse line by line. "Hibernate" in a line NOT starting with whitespace or
+                // following "The following" is available. Lines with "not available" are disabled.
+                var lines = output.Split('\n').Select(l => l.Trim()).ToArray();
+                var hibernateAvailable = false;
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("Hibernate", StringComparison.OrdinalIgnoreCase) &&
+                        !line.Contains("not available", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hibernateAvailable = true;
+                    }
+                }
+
+                if (hibernateAvailable)
+                    Fail("Hibernate appears to be available");
+                else
+                    Pass("Hibernate disabled");
+            }
+            catch
+            {
+                Warn("Could not check hibernate status");
+            }
+        }
     }
 
     private static void CheckLidCloseAction()
@@ -246,7 +318,7 @@ public static class ComplianceChecker
             var psi = new ProcessStartInfo
             {
                 FileName = "powercfg.exe",
-                Arguments = "/query SCHEME_CURRENT SUB_BUTTONS LIDACTION",
+                Arguments = "/query SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true,
@@ -256,28 +328,37 @@ public static class ComplianceChecker
             var output = process?.StandardOutput.ReadToEnd() ?? "";
             process?.WaitForExit(10_000);
 
-            // Look for "Current AC Power Setting Index: 0x00000000" (Do Nothing)
-            if (output.Contains("0x00000000"))
+            // Parse both AC and DC lines specifically
+            var lines = output.Split('\n');
+            var acOk = false;
+            var dcOk = false;
+
+            foreach (var line in lines)
             {
-                Pass("Lid close action → Do Nothing");
+                var trimmed = line.Trim();
+                if (trimmed.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase))
+                {
+                    acOk = trimmed.Contains("0x00000000", StringComparison.OrdinalIgnoreCase);
+                }
+                else if (trimmed.Contains("Current DC Power Setting Index", StringComparison.OrdinalIgnoreCase))
+                {
+                    dcOk = trimmed.Contains("0x00000000", StringComparison.OrdinalIgnoreCase);
+                }
             }
+
+            if (acOk && dcOk)
+                Pass("Lid close action: Do Nothing (AC and DC)");
+            else if (acOk)
+                Fail("Lid close action: Do Nothing on AC, but NOT on DC");
+            else if (dcOk)
+                Fail("Lid close action: Do Nothing on DC, but NOT on AC");
             else
-            {
                 Fail("Lid close action is not set to 'Do Nothing'");
-            }
         }
         catch
         {
             Warn("Could not check lid close action");
         }
-    }
-
-    private static void CheckPowerCfgSetting(string name, string settingAlias, string expectedValue)
-    {
-        // powercfg /change uses aliases, but /query uses GUIDs
-        // For a simple check, we trust that setup ran correctly
-        // and just verify the key settings are in effect
-        Pass($"{name} timeout → configured (run --setup to reconfigure if needed)");
     }
 
     private static void CheckService()
