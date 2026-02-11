@@ -52,12 +52,20 @@ public static class ComplianceChecker
             using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
             var edition = key?.GetValue("EditionID") as string ?? "Unknown";
             var build = key?.GetValue("CurrentBuildNumber") as string ?? "Unknown";
+            var isBuildNumber = int.TryParse(build, out var buildNumber);
 
             if (edition.Contains("Pro", StringComparison.OrdinalIgnoreCase) ||
                 edition.Contains("Enterprise", StringComparison.OrdinalIgnoreCase) ||
                 edition.Contains("Education", StringComparison.OrdinalIgnoreCase))
             {
-                Pass($"Windows Edition: {edition} (Build {build})");
+                if (isBuildNumber && buildNumber >= 22000)
+                {
+                    Pass($"Windows Edition: {edition} (Build {buildNumber})");
+                }
+                else
+                {
+                    Fail($"Windows build: {build} - requires Windows 11 build 22000+");
+                }
             }
             else
             {
