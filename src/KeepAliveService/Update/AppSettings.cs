@@ -1,9 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace KeepAliveService.Update;
 
 public sealed class AppSettings
 {
+    private static readonly byte[] PasswordEntropy = Encoding.UTF8.GetBytes("WindowsKeepAlive.CredentialEntropy.v1");
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -19,6 +23,14 @@ public sealed class AppSettings
     public DateTime? LastUpdateCheckUtc { get; set; }
 
     public int UpdateCheckIntervalHours { get; set; } = 24;
+
+    public string? SavedUsername { get; set; }
+
+    public string? SavedAccountType { get; set; }
+
+    public string? SavedDomain { get; set; }
+
+    public string? SavedPasswordEncrypted { get; set; }
 
     public static string ProgramDataDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WindowsKeepAlive");
@@ -70,6 +82,38 @@ public sealed class AppSettings
         UpdateCheckIntervalHours = NormalizeInterval(UpdateCheckIntervalHours);
         var json = JsonSerializer.Serialize(this, JsonOptions);
         File.WriteAllText(SettingsPath, json);
+    }
+
+    public void SetSavedPassword(string? password)
+    {
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            SavedPasswordEncrypted = null;
+            return;
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(password);
+        var protectedBytes = ProtectedData.Protect(bytes, PasswordEntropy, DataProtectionScope.LocalMachine);
+        SavedPasswordEncrypted = Convert.ToBase64String(protectedBytes);
+    }
+
+    public string? GetSavedPassword()
+    {
+        if (string.IsNullOrWhiteSpace(SavedPasswordEncrypted))
+        {
+            return null;
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(SavedPasswordEncrypted);
+            var plain = ProtectedData.Unprotect(bytes, PasswordEntropy, DataProtectionScope.LocalMachine);
+            return Encoding.UTF8.GetString(plain);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static int NormalizeInterval(int value)

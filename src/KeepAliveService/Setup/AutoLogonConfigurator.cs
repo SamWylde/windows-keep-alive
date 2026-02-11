@@ -20,6 +20,7 @@ public static class AutoLogonConfigurator
 
         Console.WriteLine();
         Console.WriteLine("=== Auto-Login Configuration ===");
+        WarnIfPolicyMayBeIgnoredOnHome();
 
         DisableWindowsHelloRequirement();
         EnableArso();
@@ -39,6 +40,7 @@ public static class AutoLogonConfigurator
 
         Console.WriteLine();
         Console.WriteLine("=== Auto-Login Configuration ===");
+        WarnIfPolicyMayBeIgnoredOnHome();
 
         DisableWindowsHelloRequirement();
         EnableArso();
@@ -46,6 +48,18 @@ public static class AutoLogonConfigurator
         ConfigureAutoLogonWithCredentials(credentials);
 
         return _failures == 0;
+    }
+
+    private static void WarnIfPolicyMayBeIgnoredOnHome()
+    {
+        if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _)
+            || info?.IsHomeOrCore != true)
+        {
+            return;
+        }
+
+        WriteWarning("Windows Home/Core detected: policy-based lock-screen and screen-saver settings may not be enforced.");
+        WriteWarning("Auto-logon still depends on runtime behavior after reboot; verify with --check or the Status tab.");
     }
 
     /// <summary>
@@ -437,11 +451,41 @@ public static class AutoLogonConfigurator
             };
 
             using var process = Process.Start(psi);
-            process?.WaitForExit(30_000);
-            var output = process?.StandardOutput.ReadToEnd()?.Trim() ?? "";
-            var error = process?.StandardError.ReadToEnd()?.Trim() ?? "";
+            if (process == null)
+            {
+                WriteError("Autologon64.exe signature verification failed: could not start powershell.");
+                return false;
+            }
 
-            if (process?.ExitCode == 0 && output.Contains("VALID", StringComparison.OrdinalIgnoreCase))
+            var outputReadTask = process.StandardOutput.ReadToEndAsync();
+            var errorReadTask = process.StandardError.ReadToEndAsync();
+
+            if (!process.WaitForExit(30_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+
+                WriteError("Autologon64.exe signature verification timed out.");
+                Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
+                try { File.Delete(filePath); } catch { }
+                return false;
+            }
+
+            var readsCompleted = Task.WaitAll([outputReadTask, errorReadTask], 5000);
+            var output = readsCompleted ? outputReadTask.Result.Trim() : string.Empty;
+            var error = readsCompleted ? errorReadTask.Result.Trim() : string.Empty;
+            if (!readsCompleted)
+            {
+                WriteWarning("Autologon64.exe signature verification output read timed out.");
+            }
+
+            if (process.ExitCode == 0 && output.Contains("VALID", StringComparison.OrdinalIgnoreCase))
             {
                 WriteSuccess("Autologon64.exe Authenticode signature verified (Valid, Microsoft Corporation)");
                 return true;
