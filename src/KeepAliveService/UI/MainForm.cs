@@ -358,7 +358,8 @@ public sealed class MainForm : Form
         RefreshLogViewer();
         _logTimer.Start();
 
-        await CheckForUpdatesAsync(force: false);
+        // Always perform a real update check on app startup.
+        await CheckForUpdatesAsync(force: true);
         _updateTimer.Start();
     }
 
