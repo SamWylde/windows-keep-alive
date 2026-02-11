@@ -5,19 +5,32 @@ using System.Text.Json;
 
 namespace KeepAliveService.Update;
 
-public sealed class GitHubUpdateChecker
+public sealed class GitHubUpdateChecker : IDisposable
 {
     private const string Owner = "SamWylde";
     private const string Repo = "windows-keep-alive";
 
     private readonly AppSettings _settings;
     private readonly HttpClient _httpClient;
+    private readonly bool _disposeHttpClient;
 
     public GitHubUpdateChecker(AppSettings settings, HttpClient? httpClient = null)
     {
         _settings = settings;
-        _httpClient = httpClient ?? new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("WindowsKeepAlive/1.1.0");
+
+        if (httpClient == null)
+        {
+            _httpClient = new HttpClient();
+            _disposeHttpClient = true;
+        }
+        else
+        {
+            _httpClient = httpClient;
+            _disposeHttpClient = false;
+        }
+
+        var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"WindowsKeepAlive/{version}");
     }
 
     public async Task<UpdateCheckResult> CheckForUpdateAsync(bool force = false, CancellationToken cancellationToken = default)
@@ -161,8 +174,9 @@ public sealed class GitHubUpdateChecker
             {
                 FileName = "cmd.exe",
                 Arguments = $"/c \"{scriptPath}\"",
-                UseShellExecute = true,
+                UseShellExecute = false,
                 CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = Path.GetDirectoryName(targetExe),
             });
 
@@ -290,6 +304,14 @@ start """" ""%TARGET_EXE%""
 del /f /q ""%~f0"" >nul 2>&1
 exit /b 1
 ";
+    }
+
+    public void Dispose()
+    {
+        if (_disposeHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }
 

@@ -5,15 +5,22 @@ namespace KeepAliveService.UI;
 
 public sealed class RichTextBoxWriter : TextWriter
 {
+    private const long MaxLogBytes = 1_048_576; // 1 MB
+    private const long RetainedLogBytes = 786_432; // 768 KB
+    private const int RotationCheckIntervalLines = 50;
+
     private readonly RichTextBox _outputBox;
     private readonly object _sync = new();
     private readonly StringBuilder _buffer = new();
     private readonly string _logFilePath;
+    private int _linesSinceRotationCheck;
 
     public RichTextBoxWriter(RichTextBox outputBox)
     {
         _outputBox = outputBox;
+        AppSettings.EnsureDirectories();
         _logFilePath = AppSettings.LogPath;
+        RotateLogIfNeeded();
     }
 
     public override Encoding Encoding => Encoding.UTF8;
@@ -112,9 +119,59 @@ public sealed class RichTextBoxWriter : TextWriter
     {
         try
         {
-            AppSettings.EnsureDirectories();
+            _linesSinceRotationCheck++;
+            if (_linesSinceRotationCheck >= RotationCheckIntervalLines)
+            {
+                _linesSinceRotationCheck = 0;
+                RotateLogIfNeeded();
+            }
+
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             File.AppendAllText(_logFilePath, $"{timestamp} {line}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
+    private void RotateLogIfNeeded()
+    {
+        try
+        {
+            var info = new FileInfo(_logFilePath);
+            if (!info.Exists || info.Length <= MaxLogBytes)
+            {
+                return;
+            }
+
+            using var source = new FileStream(_logFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var start = Math.Max(0, source.Length - RetainedLogBytes);
+            source.Seek(start, SeekOrigin.Begin);
+
+            using var memory = new MemoryStream();
+            source.CopyTo(memory);
+            var bytes = memory.ToArray();
+
+            // Try to start on a line boundary after truncation.
+            var offset = 0;
+            if (start > 0)
+            {
+                var lineBreakIndex = Array.IndexOf(bytes, (byte)'\n');
+                if (lineBreakIndex >= 0 && lineBreakIndex + 1 < bytes.Length)
+                {
+                    offset = lineBreakIndex + 1;
+                }
+            }
+
+            var trimmedLength = bytes.Length - offset;
+            if (trimmedLength <= 0)
+            {
+                return;
+            }
+
+            using var target = new FileStream(_logFilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            target.Write(bytes, offset, trimmedLength);
         }
         catch
         {

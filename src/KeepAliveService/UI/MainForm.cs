@@ -423,10 +423,22 @@ public sealed class MainForm : Form
             async () =>
             {
                 var result = await Task.Run(() => CredentialValidator.Validate(credentials!));
-                if (result.IsValid)
+                if (result.Status == CredentialValidationStatus.Valid)
                 {
                     Console.WriteLine($"[PASS] {result.Message}");
                     Console.WriteLine("[INFO] This validates credentials only. Full auto-login still depends on policy and setup checks.");
+                    return;
+                }
+
+                if (result.Status == CredentialValidationStatus.Warning)
+                {
+                    Console.WriteLine($"[WARN] {result.Message}");
+                    MessageBox.Show(
+                        "Credentials could not be strongly verified for this Microsoft account setup.\n" +
+                        "Setup can still continue, but verify after reboot with --check or the Status tab.",
+                        "Credential Test Warning",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
                     return;
                 }
 
@@ -785,6 +797,7 @@ public sealed class MainForm : Form
         _logTimer.Stop();
         Console.SetOut(_originalConsoleOut);
         Console.SetError(_originalConsoleError);
+        _updateChecker.Dispose();
     }
 
     private static int ToTimerIntervalMilliseconds(int hours)

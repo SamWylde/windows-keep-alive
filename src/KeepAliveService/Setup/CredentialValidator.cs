@@ -13,12 +13,18 @@ public static partial class CredentialValidator
     {
         if (string.IsNullOrWhiteSpace(credentials.Username))
         {
-            return new CredentialValidationResult(false, "Username is required.", null);
+            return new CredentialValidationResult(
+                CredentialValidationStatus.Invalid,
+                "Username is required.",
+                null);
         }
 
         if (string.IsNullOrWhiteSpace(credentials.Password))
         {
-            return new CredentialValidationResult(false, "Password is required.", null);
+            return new CredentialValidationResult(
+                CredentialValidationStatus.Invalid,
+                "Password is required.",
+                null);
         }
 
         var username = credentials.Username.Trim();
@@ -40,15 +46,25 @@ public static partial class CredentialValidator
             }
 
             return new CredentialValidationResult(
-                true,
+                CredentialValidationStatus.Valid,
                 $"Credential check passed for '{username}' ({domain}).",
                 null);
         }
 
         var errorCode = Marshal.GetLastWin32Error();
         var errorText = new Win32Exception(errorCode).Message;
+
+        if (credentials.AccountType == AccountType.MicrosoftAccount)
+        {
+            return new CredentialValidationResult(
+                CredentialValidationStatus.Warning,
+                $"Could not strongly validate Microsoft account credentials ({errorCode}: {errorText}). " +
+                "Continuing anyway. This can happen with some Windows Hello-only setups.",
+                errorCode);
+        }
+
         return new CredentialValidationResult(
-            false,
+            CredentialValidationStatus.Invalid,
             $"Credential check failed ({errorCode}): {errorText}",
             errorCode);
     }
@@ -68,7 +84,17 @@ public static partial class CredentialValidator
     private static partial bool CloseHandle(IntPtr hObject);
 }
 
+public enum CredentialValidationStatus
+{
+    Valid,
+    Warning,
+    Invalid,
+}
+
 public sealed record CredentialValidationResult(
-    bool IsValid,
+    CredentialValidationStatus Status,
     string Message,
-    int? ErrorCode);
+    int? ErrorCode)
+{
+    public bool IsValid => Status != CredentialValidationStatus.Invalid;
+}
