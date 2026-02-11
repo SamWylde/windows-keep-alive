@@ -193,6 +193,15 @@ public static class AutoLogonConfigurator
             return;
         }
 
+        var credentialCheck = CredentialValidator.Validate(credentials);
+        if (!credentialCheck.IsValid)
+        {
+            WriteError(credentialCheck.Message);
+            _failures++;
+            return;
+        }
+
+        WriteSuccess("Credential validation passed");
         Console.WriteLine($"  Using domain: {domain}");
 
         // Warn about brief command-line exposure
