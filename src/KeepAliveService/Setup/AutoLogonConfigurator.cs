@@ -193,6 +193,28 @@ public static class AutoLogonConfigurator
             return;
         }
 
+        var readiness = SignInReadinessDetector.Assess(credentials);
+        if (readiness.Status == SignInReadinessStatus.Blocked)
+        {
+            WriteError(readiness.Message);
+            foreach (var step in readiness.RemediationSteps)
+            {
+                Console.WriteLine($"    - {step}");
+            }
+
+            _failures++;
+            return;
+        }
+
+        if (readiness.Status == SignInReadinessStatus.Warning)
+        {
+            WriteWarning(readiness.Message);
+        }
+        else
+        {
+            WriteSuccess(readiness.Message);
+        }
+
         var credentialCheck = CredentialValidator.Validate(credentials);
         if (credentialCheck.Status == CredentialValidationStatus.Invalid)
         {
@@ -324,25 +346,68 @@ public static class AutoLogonConfigurator
             return autologonPath;
         }
 
-        Console.Write("  Downloading Autologon64.exe from Sysinternals...");
+        WriteInfo("Downloading Autologon64.exe from Sysinternals...");
 
         try
         {
             using var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KeepAliveService/1.1.0");
-            var bytes = httpClient.GetByteArrayAsync("https://live.sysinternals.com/Autologon64.exe").Result;
-            File.WriteAllBytes(autologonPath, bytes);
+            var version = typeof(AutoLogonConfigurator).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"KeepAliveService/{version}");
 
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine(" Done");
-            Console.ResetColor();
+            using var response = httpClient
+                .GetAsync("https://live.sysinternals.com/Autologon64.exe", HttpCompletionOption.ResponseHeadersRead)
+                .Result;
+            response.EnsureSuccessStatusCode();
+
+            var contentLength = response.Content.Headers.ContentLength;
+            using var source = response.Content.ReadAsStream();
+            using var destination = File.Create(autologonPath);
+
+            var buffer = new byte[81920];
+            long totalRead = 0;
+            var nextPercentReport = 10;
+            var nextByteReport = 2L * 1024L * 1024L;
+
+            while (true)
+            {
+                var bytesRead = source.Read(buffer, 0, buffer.Length);
+                if (bytesRead <= 0)
+                {
+                    break;
+                }
+
+                destination.Write(buffer, 0, bytesRead);
+                totalRead += bytesRead;
+
+                if (contentLength is > 0)
+                {
+                    var percent = (int)Math.Clamp(totalRead * 100L / contentLength.Value, 0L, 100L);
+                    if (percent >= nextPercentReport)
+                    {
+                        WriteInfo($"Autologon download: {percent}% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
+                        while (percent >= nextPercentReport)
+                        {
+                            nextPercentReport += 10;
+                        }
+                    }
+                }
+                else if (totalRead >= nextByteReport)
+                {
+                    WriteInfo($"Autologon download: {FormatBytes(totalRead)}");
+                    nextByteReport += 2L * 1024L * 1024L;
+                }
+            }
+
+            if (contentLength is > 0)
+            {
+                WriteInfo($"Autologon download: 100% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
+            }
+
+            WriteSuccess("Autologon64.exe downloaded");
             return autologonPath;
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine(" Failed");
-            Console.ResetColor();
             WriteError($"Download failed: {ex.Message}");
             Console.WriteLine("  You can manually download Autologon64.exe from:");
             Console.WriteLine("  https://learn.microsoft.com/en-us/sysinternals/downloads/autologon");
@@ -544,5 +609,27 @@ public static class AutoLogonConfigurator
         Console.Write("  [FAIL] ");
         Console.ResetColor();
         Console.WriteLine(message);
+    }
+
+    private static void WriteInfo(string message)
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write("  [INFO] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] suffixes = ["B", "KB", "MB", "GB"];
+        var order = 0;
+        double size = bytes;
+        while (size >= 1024 && order < suffixes.Length - 1)
+        {
+            order++;
+            size /= 1024;
+        }
+
+        return $"{size:0.##} {suffixes[order]}";
     }
 }

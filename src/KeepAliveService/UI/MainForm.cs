@@ -28,6 +28,9 @@ public sealed class MainForm : Form
     private readonly Button _updatePasswordButton;
     private readonly Button _uninstallButton;
     private readonly Button _runCheckButton;
+    private readonly Button _startServiceButton;
+    private readonly Button _stopServiceButton;
+    private readonly Button _restartServiceButton;
     private readonly Label _serviceStatusLabel;
     private readonly Label _complianceLabel;
     private readonly Label _lastCheckLabel;
@@ -46,6 +49,7 @@ public sealed class MainForm : Form
 
     private bool _isOperationRunning;
     private bool _isUpdateCheckRunning;
+    private bool _statusTabAutoCheckTriggered;
     private long _lastLogLength = -1;
     private UpdateCheckResult? _lastUpdateResult;
 
@@ -60,6 +64,7 @@ public sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(900, 650);
         Size = new Size(1080, 760);
+        TryApplyAppIcon();
 
         var tabControl = new TabControl
         {
@@ -74,6 +79,14 @@ public sealed class MainForm : Form
         tabControl.TabPages.Add(statusTab);
         tabControl.TabPages.Add(updatesTab);
         tabControl.TabPages.Add(logsTab);
+        tabControl.Selected += async (_, _) =>
+        {
+            if (tabControl.SelectedTab == statusTab && !_statusTabAutoCheckTriggered)
+            {
+                _statusTabAutoCheckTriggered = true;
+                await RunComplianceCheckAsync();
+            }
+        };
         Controls.Add(tabControl);
 
         var statusStrip = new StatusStrip();
@@ -81,6 +94,8 @@ public sealed class MainForm : Form
         _adminStatus = new ToolStripStatusLabel();
         _serviceStatusStrip = new ToolStripStatusLabel();
         _updateStatusStrip = new ToolStripStatusLabel("Update: idle");
+        var copyStatus = new ToolStripStatusLabel("Copy") { IsLink = true };
+        copyStatus.Click += (_, _) => CopyOutputToClipboard();
         var clearStatus = new ToolStripStatusLabel("Clear") { IsLink = true };
         clearStatus.Click += (_, _) =>
         {
@@ -95,6 +110,8 @@ public sealed class MainForm : Form
         statusStrip.Items.Add(new ToolStripStatusLabel(" | "));
         statusStrip.Items.Add(_updateStatusStrip);
         statusStrip.Items.Add(new ToolStripStatusLabel { Spring = true });
+        statusStrip.Items.Add(copyStatus);
+        statusStrip.Items.Add(new ToolStripStatusLabel(" "));
         statusStrip.Items.Add(clearStatus);
         Controls.Add(statusStrip);
 
@@ -232,6 +249,17 @@ public sealed class MainForm : Form
             Font = new Font("Consolas", 10.5f),
             WordWrap = false,
         };
+        var outputMenu = new ContextMenuStrip();
+        outputMenu.Items.Add("Copy Selected", null, (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_setupOutputBox.SelectedText))
+            {
+                Clipboard.SetText(_setupOutputBox.SelectedText);
+            }
+        });
+        outputMenu.Items.Add("Copy All", null, (_, _) => CopyOutputToClipboard());
+        outputMenu.Items.Add("Select All", null, (_, _) => _setupOutputBox.SelectAll());
+        _setupOutputBox.ContextMenuStrip = outputMenu;
         outputGroup.Controls.Add(_setupOutputBox);
         setupRoot.Controls.Add(outputGroup, 0, 1);
 
@@ -255,11 +283,29 @@ public sealed class MainForm : Form
         _lastCheckLabel = new Label { AutoSize = true, Text = "Last check: never" };
         _runCheckButton = new Button { Text = "Run Check", AutoSize = true };
         _runCheckButton.Click += async (_, _) => await RunComplianceCheckAsync();
+        _startServiceButton = new Button { Text = "Start Service", AutoSize = true };
+        _startServiceButton.Click += async (_, _) => await StartServiceAsync();
+        _stopServiceButton = new Button { Text = "Stop Service", AutoSize = true };
+        _stopServiceButton.Click += async (_, _) => await StopServiceAsync();
+        _restartServiceButton = new Button { Text = "Restart Service", AutoSize = true };
+        _restartServiceButton.Click += async (_, _) => await RestartServiceAsync();
+
+        var statusButtonRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+        };
+        statusButtonRow.Controls.Add(_runCheckButton);
+        statusButtonRow.Controls.Add(_startServiceButton);
+        statusButtonRow.Controls.Add(_stopServiceButton);
+        statusButtonRow.Controls.Add(_restartServiceButton);
 
         statusLayout.Controls.Add(_serviceStatusLabel, 0, 0);
         statusLayout.Controls.Add(_complianceLabel, 0, 1);
         statusLayout.Controls.Add(_lastCheckLabel, 0, 2);
-        statusLayout.Controls.Add(_runCheckButton, 0, 3);
+        statusLayout.Controls.Add(statusButtonRow, 0, 3);
 
         // Updates tab
         var updatesLayout = new TableLayoutPanel
@@ -423,6 +469,36 @@ public sealed class MainForm : Form
             "Testing credentials",
             async () =>
             {
+                var readiness = SignInReadinessDetector.Assess(credentials!);
+                if (readiness.Status == SignInReadinessStatus.Blocked)
+                {
+                    Console.WriteLine($"[FAIL] {readiness.Message}");
+                    foreach (var step in readiness.RemediationSteps)
+                    {
+                        Console.WriteLine($"  - {step}");
+                    }
+
+                    var remediationText = readiness.RemediationSteps.Count == 0
+                        ? string.Empty
+                        : Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, readiness.RemediationSteps.Select(s => $"- {s}"));
+
+                    MessageBox.Show(
+                        readiness.Message + remediationText,
+                        "Password Sign-In Blocked",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (readiness.Status == SignInReadinessStatus.Warning)
+                {
+                    Console.WriteLine($"[WARN] {readiness.Message}");
+                }
+                else
+                {
+                    Console.WriteLine($"[PASS] {readiness.Message}");
+                }
+
                 var result = await Task.Run(() => CredentialValidator.Validate(credentials!));
                 if (result.Status == CredentialValidationStatus.Valid)
                 {
@@ -471,6 +547,76 @@ public sealed class MainForm : Form
             {
                 await Task.Run(ServiceInstaller.Uninstall);
                 Console.WriteLine("[OK] Uninstall flow completed.");
+            });
+    }
+
+    private async Task StartServiceAsync()
+    {
+        await RunOperationAsync(
+            "Starting service",
+            async () =>
+            {
+                await Task.Run(() =>
+                {
+                    using var service = new ServiceController("KeepAliveService");
+                    _ = service.Status;
+                    if (service.Status == ServiceControllerStatus.Running)
+                    {
+                        Console.WriteLine("[INFO] Service is already running.");
+                        return;
+                    }
+
+                    service.Start();
+                    service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                    Console.WriteLine("[OK] Service started.");
+                });
+            });
+    }
+
+    private async Task StopServiceAsync()
+    {
+        await RunOperationAsync(
+            "Stopping service",
+            async () =>
+            {
+                await Task.Run(() =>
+                {
+                    using var service = new ServiceController("KeepAliveService");
+                    _ = service.Status;
+                    if (service.Status == ServiceControllerStatus.Stopped)
+                    {
+                        Console.WriteLine("[INFO] Service is already stopped.");
+                        return;
+                    }
+
+                    service.Stop();
+                    service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                    Console.WriteLine("[OK] Service stopped.");
+                });
+            });
+    }
+
+    private async Task RestartServiceAsync()
+    {
+        await RunOperationAsync(
+            "Restarting service",
+            async () =>
+            {
+                await Task.Run(() =>
+                {
+                    using var service = new ServiceController("KeepAliveService");
+                    _ = service.Status;
+
+                    if (service.Status != ServiceControllerStatus.Stopped)
+                    {
+                        service.Stop();
+                        service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                    }
+
+                    service.Start();
+                    service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                    Console.WriteLine("[OK] Service restarted.");
+                });
             });
     }
 
@@ -587,7 +733,20 @@ public sealed class MainForm : Form
             "Applying update",
             async () =>
             {
-                var applyResult = await _updateChecker.ApplyUpdateAsync(_lastUpdateResult);
+                var progress = new Progress<DownloadProgress>(p =>
+                {
+                    if (p.Percentage.HasValue)
+                    {
+                        _updateStatusStrip.Text =
+                            $"Downloading update: {p.Percentage.Value}% ({FormatBytes(p.BytesReceived)} / {FormatBytes(p.TotalBytes)})";
+                    }
+                    else
+                    {
+                        _updateStatusStrip.Text = $"Downloading update: {FormatBytes(p.BytesReceived)}";
+                    }
+                });
+
+                var applyResult = await _updateChecker.ApplyUpdateAsync(_lastUpdateResult, progress);
                 if (!applyResult.Started)
                 {
                     Console.WriteLine($"[FAIL] {applyResult.Message}");
@@ -781,6 +940,41 @@ public sealed class MainForm : Form
         }
     }
 
+    private void CopyOutputToClipboard()
+    {
+        try
+        {
+            var text = _setupOutputBox.Text;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            Clipboard.SetText(text);
+            _updateStatusStrip.Text = "Output copied to clipboard";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Copy to clipboard failed: {ex.Message}");
+        }
+    }
+
+    private void TryApplyAppIcon()
+    {
+        try
+        {
+            using var extracted = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (extracted != null)
+            {
+                Icon = (Icon)extracted.Clone();
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     private void SetControlsEnabled(bool enabled)
     {
         _runSetupButton.Enabled = enabled;
@@ -788,6 +982,9 @@ public sealed class MainForm : Form
         _updatePasswordButton.Enabled = enabled;
         _uninstallButton.Enabled = enabled;
         _runCheckButton.Enabled = enabled;
+        _startServiceButton.Enabled = enabled;
+        _stopServiceButton.Enabled = enabled;
+        _restartServiceButton.Enabled = enabled;
         _checkUpdatesButton.Enabled = enabled;
         _updateNowButton.Enabled = enabled && (_lastUpdateResult?.IsUpdateAvailable ?? false);
     }
@@ -817,6 +1014,26 @@ public sealed class MainForm : Form
 
         var build = version.Build < 0 ? 0 : version.Build;
         return $"{version.Major}.{version.Minor}.{build}";
+    }
+
+    private static string FormatBytes(long? bytes)
+    {
+        if (bytes == null)
+        {
+            return "unknown";
+        }
+
+        var value = bytes.Value;
+        string[] suffixes = ["B", "KB", "MB", "GB"];
+        var order = 0;
+        double size = value;
+        while (size >= 1024 && order < suffixes.Length - 1)
+        {
+            order++;
+            size /= 1024;
+        }
+
+        return $"{size:0.##} {suffixes[order]}";
     }
 
     private static bool IsRunningAsAdmin()
