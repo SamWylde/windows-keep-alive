@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using KeepAliveService.UI;
+using KeepAliveService.Update;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -22,7 +24,26 @@ public static class AutoLogonConfigurator
         DisableWindowsHelloRequirement();
         EnableArso();
         DisableLockScreen();
-        ConfigureAutoLogon();
+        var credentials = PromptForCredentialsFromConsole();
+        if (credentials != null)
+        {
+            ConfigureAutoLogonWithCredentials(credentials);
+        }
+
+        return _failures == 0;
+    }
+
+    public static bool Configure(CredentialInfo credentials)
+    {
+        _failures = 0;
+
+        Console.WriteLine();
+        Console.WriteLine("=== Auto-Login Configuration ===");
+
+        DisableWindowsHelloRequirement();
+        EnableArso();
+        DisableLockScreen();
+        ConfigureAutoLogonWithCredentials(credentials);
 
         return _failures == 0;
     }
@@ -35,7 +56,20 @@ public static class AutoLogonConfigurator
         _failures = 0;
         Console.WriteLine();
         Console.WriteLine("=== Update Auto-Login Password ===");
-        ConfigureAutoLogon();
+        var credentials = PromptForCredentialsFromConsole();
+        if (credentials != null)
+        {
+            ConfigureAutoLogonWithCredentials(credentials);
+        }
+        return _failures == 0;
+    }
+
+    public static bool UpdatePassword(CredentialInfo credentials)
+    {
+        _failures = 0;
+        Console.WriteLine();
+        Console.WriteLine("=== Update Auto-Login Password ===");
+        ConfigureAutoLogonWithCredentials(credentials);
         return _failures == 0;
     }
 
@@ -117,7 +151,7 @@ public static class AutoLogonConfigurator
         }
     }
 
-    private static void ConfigureAutoLogon()
+    private static void ConfigureAutoLogonWithCredentials(CredentialInfo credentials)
     {
         // Download Sysinternals Autologon64.exe
         var autologonPath = DownloadAutologon();
@@ -135,63 +169,31 @@ public static class AutoLogonConfigurator
             return;
         }
 
-        // Prompt for credentials
-        Console.WriteLine();
-        Console.WriteLine("  Enter your Windows login credentials.");
-        Console.WriteLine("  The password is your Windows/Microsoft account password, NOT your PIN.");
-        Console.WriteLine();
-
-        Console.Write("  Username: ");
-        var username = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(username))
+        var username = credentials.Username.Trim();
+        if (string.IsNullOrWhiteSpace(username))
         {
             WriteError("Username cannot be empty");
             _failures++;
             return;
         }
 
-        // Prompt for account type instead of guessing from username
-        Console.WriteLine();
-        Console.WriteLine("  Account type:");
-        Console.WriteLine("    1. Microsoft account (e.g., user@outlook.com, user@hotmail.com)");
-        Console.WriteLine("    2. Local Windows account");
-        Console.WriteLine("    3. Domain / Azure AD / Work account (e.g., user@company.com)");
-        Console.Write("  Select (1/2/3): ");
-        var accountChoice = Console.ReadLine()?.Trim();
-
-        string domain;
-        switch (accountChoice)
-        {
-            case "1":
-                domain = "MicrosoftAccount";
-                break;
-            case "2":
-                domain = Environment.MachineName;
-                break;
-            case "3":
-                var detectedDomain = Environment.UserDomainName;
-                Console.Write($"  Domain name [{detectedDomain}]: ");
-                var customDomain = Console.ReadLine()?.Trim();
-                domain = string.IsNullOrEmpty(customDomain) ? detectedDomain : customDomain;
-                break;
-            default:
-                WriteError("Invalid selection. Please enter 1, 2, or 3.");
-                _failures++;
-                return;
-        }
-
-        Console.WriteLine($"  Using domain: {domain}");
-
-        Console.Write("  Password: ");
-        var password = ReadPasswordMasked();
-        Console.WriteLine();
-
-        if (string.IsNullOrEmpty(password))
+        var password = credentials.Password;
+        if (string.IsNullOrWhiteSpace(password))
         {
             WriteError("Password cannot be empty");
             _failures++;
             return;
         }
+
+        var domain = credentials.ResolveDomain();
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            WriteError("Domain could not be resolved");
+            _failures++;
+            return;
+        }
+
+        Console.WriteLine($"  Using domain: {domain}");
 
         // Warn about brief command-line exposure
         Console.ForegroundColor = ConsoleColor.Yellow;
@@ -218,10 +220,85 @@ public static class AutoLogonConfigurator
         VerifyAutoLogon(username, domain);
     }
 
+    private static CredentialInfo? PromptForCredentialsFromConsole()
+    {
+        Console.WriteLine();
+        Console.WriteLine("  Enter your Windows login credentials.");
+        Console.WriteLine("  The password is your Windows/Microsoft account password, NOT your PIN.");
+        Console.WriteLine();
+
+        Console.Write("  Username: ");
+        var username = Console.ReadLine()?.Trim();
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            WriteError("Username cannot be empty");
+            _failures++;
+            return null;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("  Account type:");
+        Console.WriteLine("    1. Microsoft account (e.g., user@outlook.com, user@hotmail.com)");
+        Console.WriteLine("    2. Local Windows account");
+        Console.WriteLine("    3. Domain / Azure AD / Work account (e.g., user@company.com)");
+        Console.Write("  Select (1/2/3): ");
+        var accountChoice = Console.ReadLine()?.Trim();
+
+        var accountType = accountChoice switch
+        {
+            "1" => AccountType.MicrosoftAccount,
+            "2" => AccountType.LocalAccount,
+            "3" => AccountType.DomainOrWorkAccount,
+            _ => (AccountType?)null,
+        };
+
+        if (accountType == null)
+        {
+            WriteError("Invalid selection. Please enter 1, 2, or 3.");
+            _failures++;
+            return null;
+        }
+
+        string domain;
+        if (accountType == AccountType.MicrosoftAccount)
+        {
+            domain = "MicrosoftAccount";
+        }
+        else if (accountType == AccountType.LocalAccount)
+        {
+            domain = Environment.MachineName;
+        }
+        else
+        {
+            var detectedDomain = Environment.UserDomainName;
+            Console.Write($"  Domain name [{detectedDomain}]: ");
+            var customDomain = Console.ReadLine()?.Trim();
+            domain = string.IsNullOrWhiteSpace(customDomain) ? detectedDomain : customDomain;
+        }
+
+        Console.WriteLine($"  Using domain: {domain}");
+        Console.Write("  Password: ");
+        var password = ReadPasswordMasked();
+        Console.WriteLine();
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            WriteError("Password cannot be empty");
+            _failures++;
+            return null;
+        }
+
+        return new CredentialInfo(
+            Username: username,
+            Password: password,
+            AccountType: accountType.Value,
+            Domain: domain);
+    }
+
     private static string? DownloadAutologon()
     {
-        var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools");
-        Directory.CreateDirectory(toolsDir);
+        AppSettings.EnsureDirectories();
+        var toolsDir = AppSettings.ToolsDirectory;
         var autologonPath = Path.Combine(toolsDir, "Autologon64.exe");
 
         if (File.Exists(autologonPath))
@@ -235,7 +312,7 @@ public static class AutoLogonConfigurator
         try
         {
             using var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KeepAliveService/1.0");
+            httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KeepAliveService/1.1.0");
             var bytes = httpClient.GetByteArrayAsync("https://live.sysinternals.com/Autologon64.exe").Result;
             File.WriteAllBytes(autologonPath, bytes);
 

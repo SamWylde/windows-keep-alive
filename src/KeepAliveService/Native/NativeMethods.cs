@@ -4,6 +4,8 @@ namespace KeepAliveService.Native;
 
 internal static partial class NativeMethods
 {
+    public const int ATTACH_PARENT_PROCESS = -1;
+
     [Flags]
     public enum EXECUTION_STATE : uint
     {
@@ -15,4 +17,8 @@ internal static partial class NativeMethods
 
     [LibraryImport("kernel32.dll")]
     public static partial uint SetThreadExecutionState(EXECUTION_STATE esFlags);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool AttachConsole(int dwProcessId);
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Principal;
 using System.ServiceProcess;
+using KeepAliveService.UI;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -9,7 +10,17 @@ public static class SetupManager
 {
     private static int _criticalFailures;
 
-    public static void RunSetup()
+    public static int RunSetup()
+    {
+        return RunSetupInternal(credentials: null, skipAdminPrompt: false);
+    }
+
+    public static int RunSetup(CredentialInfo credentials)
+    {
+        return RunSetupInternal(credentials, skipAdminPrompt: true);
+    }
+
+    private static int RunSetupInternal(CredentialInfo? credentials, bool skipAdminPrompt)
     {
         _criticalFailures = 0;
 
@@ -19,10 +30,9 @@ public static class SetupManager
         Console.WriteLine("========================================");
 
         // Step 0: Preflight checks
-        if (!RunPreflightChecks())
+        if (!RunPreflightChecks(skipAdminPrompt))
         {
-            Environment.Exit(1);
-            return;
+            return 1;
         }
 
         // Step 1: Windows Update policy
@@ -30,7 +40,11 @@ public static class SetupManager
             _criticalFailures++;
 
         // Step 2: Auto-login + ARSO + lock screen
-        if (!TryRun("Auto-login configuration", AutoLogonConfigurator.Configure))
+        var autoLogonConfigured = credentials == null
+            ? TryRun("Auto-login configuration", AutoLogonConfigurator.Configure)
+            : TryRun("Auto-login configuration", () => AutoLogonConfigurator.Configure(credentials));
+
+        if (!autoLogonConfigured)
             _criticalFailures++;
 
         // Step 3: Power settings
@@ -58,10 +72,7 @@ public static class SetupManager
         // Summary - conditional on success/failure
         PrintSummary();
 
-        if (_criticalFailures > 0)
-        {
-            Environment.Exit(1);
-        }
+        return _criticalFailures > 0 ? 1 : 0;
     }
 
     private static bool TryRun(string stepName, Func<bool> action)
@@ -77,7 +88,7 @@ public static class SetupManager
         }
     }
 
-    private static bool RunPreflightChecks()
+    public static bool RunPreflightChecks(bool skipAdminPrompt = false)
     {
         Console.WriteLine();
         Console.WriteLine("=== Preflight Checks ===");
@@ -90,14 +101,16 @@ public static class SetupManager
             Console.WriteLine("  Right-click the executable and select 'Run as administrator', or");
             Console.WriteLine("  open an elevated command prompt and run the command from there.");
 
-            // Attempt to self-elevate
-            Console.WriteLine();
-            Console.Write("  Would you like to restart as Administrator? (y/n): ");
-            var response = Console.ReadLine()?.Trim().ToLowerInvariant();
-
-            if (response == "y" || response == "yes")
+            if (!skipAdminPrompt)
             {
-                TrySelfElevate();
+                Console.WriteLine();
+                Console.Write("  Would you like to restart as Administrator? (y/n): ");
+                var response = Console.ReadLine()?.Trim().ToLowerInvariant();
+
+                if (response == "y" || response == "yes")
+                {
+                    TrySelfElevate();
+                }
             }
 
             return false;
