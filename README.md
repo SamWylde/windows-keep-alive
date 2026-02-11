@@ -35,17 +35,21 @@ It also creates a desktop shortcut named `Windows Keep Alive`.
 
 ## GUI Tabs
 
-- `Setup`: run full setup, test credentials, update autologin password, uninstall service, view live output
-- `Status`: service status + compliance check
+- `Setup`: run full setup, test credentials, update autologin password, uninstall service, view/copy live output
+- `Status`: service status + compliance check + start/stop/restart service controls
 - `Updates`: current/latest version, release notes, update apply
 - `Logs`: view `C:\ProgramData\WindowsKeepAlive\app.log`
+
+Credential testing and setup now adapt to Windows Hello/passwordless policy state:
+- If password sign-in appears blocked by policy, setup stops with remediation guidance.
+- If policy state is partially unreadable, setup warns and continues with validation.
 
 ## Auto Update
 
 - Checks GitHub releases at startup and every 24 hours
 - Uses `https://api.github.com/repos/SamWylde/windows-keep-alive/releases/latest`
 - Prefers `KeepAliveService.exe` release asset (fallback: first `.exe`)
-- `Update Now` downloads to temp, stops service, replaces EXE, restarts service, relaunches app
+- `Update Now` shows download progress, then downloads to temp, stops service, replaces EXE, restarts service, relaunches app
 - Rollback path restores `.bak` if replacement fails
 
 ## CLI (backward compatible)

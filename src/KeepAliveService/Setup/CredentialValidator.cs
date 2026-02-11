@@ -8,6 +8,7 @@ public static partial class CredentialValidator
 {
     private const int LOGON32_LOGON_INTERACTIVE = 2;
     private const int LOGON32_PROVIDER_DEFAULT = 0;
+    private const int ERROR_LOGON_FAILURE = 1326;
 
     public static CredentialValidationResult Validate(CredentialInfo credentials)
     {
@@ -56,6 +57,14 @@ public static partial class CredentialValidator
 
         if (credentials.AccountType == AccountType.MicrosoftAccount)
         {
+            if (errorCode == ERROR_LOGON_FAILURE)
+            {
+                return new CredentialValidationResult(
+                    CredentialValidationStatus.Invalid,
+                    $"Credential check failed ({errorCode}): {errorText}",
+                    errorCode);
+            }
+
             return new CredentialValidationResult(
                 CredentialValidationStatus.Warning,
                 $"Could not strongly validate Microsoft account credentials ({errorCode}: {errorText}). " +

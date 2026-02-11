@@ -5,8 +5,8 @@ namespace KeepAliveService.UI;
 
 public sealed class RichTextBoxWriter : TextWriter
 {
-    private const long MaxLogBytes = 1_048_576; // 1 MB
-    private const long RetainedLogBytes = 786_432; // 768 KB
+    private const long MaxLogBytes = 5L * 1024L * 1024L; // 5 MB
+    private const long RetainedLogBytes = MaxLogBytes / 2; // 2.5 MB
     private const int RotationCheckIntervalLines = 50;
 
     private readonly RichTextBox _outputBox;

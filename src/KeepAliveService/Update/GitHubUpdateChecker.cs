@@ -144,7 +144,10 @@ public sealed class GitHubUpdateChecker : IDisposable
         }
     }
 
-    public async Task<UpdateApplyResult> ApplyUpdateAsync(UpdateCheckResult update, CancellationToken cancellationToken = default)
+    public async Task<UpdateApplyResult> ApplyUpdateAsync(
+        UpdateCheckResult update,
+        IProgress<DownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         if (!update.IsUpdateAvailable || string.IsNullOrWhiteSpace(update.DownloadUrl))
         {
@@ -160,7 +163,7 @@ public sealed class GitHubUpdateChecker : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(targetExe)!);
 
             var tempExe = Path.Combine(Path.GetTempPath(), $"KeepAliveService_update_{Guid.NewGuid():N}.exe");
-            await DownloadFileAsync(update.DownloadUrl, tempExe, cancellationToken);
+            await DownloadFileAsync(update.DownloadUrl, tempExe, progress, cancellationToken);
 
             var scriptPath = Path.Combine(Path.GetTempPath(), $"KeepAliveService_apply_{Guid.NewGuid():N}.cmd");
             var script = BuildUpdateScript(
@@ -188,13 +191,30 @@ public sealed class GitHubUpdateChecker : IDisposable
         }
     }
 
-    private async Task DownloadFileAsync(string downloadUrl, string destinationPath, CancellationToken cancellationToken)
+    private async Task DownloadFileAsync(
+        string downloadUrl,
+        string destinationPath,
+        IProgress<DownloadProgress>? progress,
+        CancellationToken cancellationToken)
     {
         using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
+        var totalBytes = response.Content.Headers.ContentLength;
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
         await using var destination = File.Create(destinationPath);
-        await source.CopyToAsync(destination, cancellationToken);
+
+        var buffer = new byte[81920];
+        long totalRead = 0;
+        int bytesRead;
+
+        while ((bytesRead = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
+            totalRead += bytesRead;
+            progress?.Report(new DownloadProgress(totalRead, totalBytes));
+        }
+
+        progress?.Report(new DownloadProgress(totalRead, totalBytes));
     }
 
     private static (string? assetName, string? downloadUrl) SelectExeAsset(JsonElement root)
@@ -329,3 +349,13 @@ public sealed record UpdateCheckResult(
 public sealed record UpdateApplyResult(
     bool Started,
     string Message);
+
+public sealed record DownloadProgress(
+    long BytesReceived,
+    long? TotalBytes)
+{
+    public int? Percentage =>
+        TotalBytes is > 0
+            ? (int)Math.Clamp(BytesReceived * 100L / TotalBytes.Value, 0L, 100L)
+            : null;
+}
