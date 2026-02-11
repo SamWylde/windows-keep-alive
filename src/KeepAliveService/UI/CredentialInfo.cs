@@ -13,6 +13,11 @@ public sealed record CredentialInfo(
     AccountType AccountType,
     string? Domain)
 {
+    public override string ToString()
+    {
+        return $"{nameof(CredentialInfo)} {{ Username = {Username}, Password = <redacted>, AccountType = {AccountType}, Domain = {Domain} }}";
+    }
+
     public string ResolveDomain()
     {
         return AccountType switch

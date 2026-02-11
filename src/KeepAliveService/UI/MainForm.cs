@@ -46,10 +46,17 @@ public sealed class MainForm : Form
     private readonly RichTextBoxWriter _richTextWriter;
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly System.Windows.Forms.Timer _logTimer;
+    private readonly System.Windows.Forms.Timer _credentialPersistTimer;
+    private readonly NotifyIcon _trayIcon;
 
     private bool _isOperationRunning;
     private bool _isUpdateCheckRunning;
+    private bool _suppressCredentialPersistence;
     private bool _statusTabAutoCheckTriggered;
+    private bool _isStartupUpdateCheck;
+    private bool _startupUpdatePromptShown;
+    private bool _allowClose;
+    private bool _trayHintShown;
     private long _lastLogLength = -1;
     private UpdateCheckResult? _lastUpdateResult;
 
@@ -65,6 +72,7 @@ public sealed class MainForm : Form
         MinimumSize = new Size(900, 650);
         Size = new Size(1080, 760);
         TryApplyAppIcon();
+        _trayIcon = CreateTrayIcon();
 
         var tabControl = new TabControl
         {
@@ -174,11 +182,16 @@ public sealed class MainForm : Form
         _accountTypeComboBox.Items.Add(new AccountTypeOption("Local Account", AccountType.LocalAccount));
         _accountTypeComboBox.Items.Add(new AccountTypeOption("Domain / Work Account", AccountType.DomainOrWorkAccount));
         _accountTypeComboBox.SelectedIndex = 0;
-        _accountTypeComboBox.SelectedIndexChanged += (_, _) => ApplyAccountTypeDefaults();
+        _accountTypeComboBox.SelectedIndexChanged += (_, _) =>
+        {
+            ApplyAccountTypeDefaults();
+            QueueCredentialPersistence();
+        };
         quickSetupLayout.Controls.Add(_accountTypeComboBox, 1, 2);
 
         quickSetupLayout.Controls.Add(new Label { Text = "Domain:", AutoSize = true, Anchor = AnchorStyles.Left }, 2, 2);
         _domainTextBox = new TextBox { Dock = DockStyle.Fill };
+        _domainTextBox.TextChanged += (_, _) => QueueCredentialPersistence();
         quickSetupLayout.Controls.Add(_domainTextBox, 3, 2);
 
         quickSetupLayout.Controls.Add(new Label { Text = "Password:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 3);
@@ -187,8 +200,11 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             PasswordChar = '*',
         };
+        _passwordTextBox.TextChanged += (_, _) => QueueCredentialPersistence();
         quickSetupLayout.Controls.Add(_passwordTextBox, 1, 3);
         quickSetupLayout.SetColumnSpan(_passwordTextBox, 3);
+
+        _usernameTextBox.TextChanged += (_, _) => QueueCredentialPersistence();
 
         var setupButtonFlow = new FlowLayoutPanel
         {
@@ -381,10 +397,21 @@ public sealed class MainForm : Form
         };
         _logTimer.Tick += (_, _) => RefreshLogViewer();
 
+        _credentialPersistTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 1000,
+        };
+        _credentialPersistTimer.Tick += (_, _) =>
+        {
+            _credentialPersistTimer.Stop();
+            PersistCredentialInputs();
+        };
+
         _versionStatus.Text = $"v{FormatVersion(Assembly.GetExecutingAssembly().GetName().Version)}";
         _adminStatus.Text = $"Admin: {(IsRunningAsAdmin() ? "Yes" : "No")}";
 
         Shown += async (_, _) => await OnShownAsync();
+        FormClosing += OnFormClosing;
         FormClosed += (_, _) => RestoreConsoleOutput();
     }
 
@@ -394,8 +421,7 @@ public sealed class MainForm : Form
         _settings.InstallPath = InstallManager.CanonicalExePath;
         _settings.Save();
 
-        _usernameTextBox.Text = Environment.UserName;
-        ApplyAccountTypeDefaults();
+        LoadSavedCredentialInputs();
 
         Console.WriteLine("[INFO] Windows Keep Alive GUI started.");
         Console.WriteLine($"[INFO] Install path: {InstallManager.CanonicalExePath}");
@@ -405,7 +431,9 @@ public sealed class MainForm : Form
         _logTimer.Start();
 
         // Always perform a real update check on app startup.
+        _isStartupUpdateCheck = true;
         await CheckForUpdatesAsync(force: true);
+        _isStartupUpdateCheck = false;
         _updateTimer.Start();
     }
 
@@ -558,17 +586,30 @@ public sealed class MainForm : Form
             {
                 await Task.Run(() =>
                 {
-                    using var service = new ServiceController("KeepAliveService");
-                    _ = service.Status;
-                    if (service.Status == ServiceControllerStatus.Running)
+                    try
                     {
-                        Console.WriteLine("[INFO] Service is already running.");
-                        return;
-                    }
+                        using var service = new ServiceController("KeepAliveService");
+                        _ = service.Status;
+                        if (service.Status == ServiceControllerStatus.Running)
+                        {
+                            Console.WriteLine("[INFO] Service is already running.");
+                            return;
+                        }
 
-                    service.Start();
-                    service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
-                    Console.WriteLine("[OK] Service started.");
+                        service.Start();
+                        service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                        Console.WriteLine("[OK] Service started.");
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new InvalidOperationException("Service is not installed. Run Setup first.", ex);
+                    }
+                    catch (System.ServiceProcess.TimeoutException ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Timed out while starting the service. Check service health in Services.msc.",
+                            ex);
+                    }
                 });
             });
     }
@@ -581,17 +622,30 @@ public sealed class MainForm : Form
             {
                 await Task.Run(() =>
                 {
-                    using var service = new ServiceController("KeepAliveService");
-                    _ = service.Status;
-                    if (service.Status == ServiceControllerStatus.Stopped)
+                    try
                     {
-                        Console.WriteLine("[INFO] Service is already stopped.");
-                        return;
-                    }
+                        using var service = new ServiceController("KeepAliveService");
+                        _ = service.Status;
+                        if (service.Status == ServiceControllerStatus.Stopped)
+                        {
+                            Console.WriteLine("[INFO] Service is already stopped.");
+                            return;
+                        }
 
-                    service.Stop();
-                    service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
-                    Console.WriteLine("[OK] Service stopped.");
+                        service.Stop();
+                        service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                        Console.WriteLine("[OK] Service stopped.");
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new InvalidOperationException("Service is not installed. Run Setup first.", ex);
+                    }
+                    catch (System.ServiceProcess.TimeoutException ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Timed out while stopping the service. Check service health in Services.msc.",
+                            ex);
+                    }
                 });
             });
     }
@@ -604,18 +658,31 @@ public sealed class MainForm : Form
             {
                 await Task.Run(() =>
                 {
-                    using var service = new ServiceController("KeepAliveService");
-                    _ = service.Status;
-
-                    if (service.Status != ServiceControllerStatus.Stopped)
+                    try
                     {
-                        service.Stop();
-                        service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
-                    }
+                        using var service = new ServiceController("KeepAliveService");
+                        _ = service.Status;
 
-                    service.Start();
-                    service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
-                    Console.WriteLine("[OK] Service restarted.");
+                        if (service.Status != ServiceControllerStatus.Stopped)
+                        {
+                            service.Stop();
+                            service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                        }
+
+                        service.Start();
+                        service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                        Console.WriteLine("[OK] Service restarted.");
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new InvalidOperationException("Service is not installed. Run Setup first.", ex);
+                    }
+                    catch (System.ServiceProcess.TimeoutException ex)
+                    {
+                        throw new InvalidOperationException(
+                            "Timed out while restarting the service. Check service health in Services.msc.",
+                            ex);
+                    }
                 });
             });
     }
@@ -689,6 +756,12 @@ public sealed class MainForm : Form
                 ? $"Update available: v{FormatVersion(result.LatestVersion)}"
                 : "Update: up to date";
 
+            if (result.IsUpdateAvailable && _isStartupUpdateCheck && !_startupUpdatePromptShown)
+            {
+                _startupUpdatePromptShown = true;
+                await PromptForStartupUpdateAsync(result);
+            }
+
             if (force || result.WasChecked)
             {
                 Console.WriteLine($"[INFO] {result.Message}");
@@ -705,7 +778,7 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task ApplyUpdateAsync()
+    private async Task ApplyUpdateAsync(bool skipConfirmation = false)
     {
         if (_lastUpdateResult is null || !_lastUpdateResult.IsUpdateAvailable)
         {
@@ -718,15 +791,18 @@ public sealed class MainForm : Form
             return;
         }
 
-        var confirm = MessageBox.Show(
-            $"Apply update to v{FormatVersion(_lastUpdateResult.LatestVersion)} now?\n\nThe app will restart automatically.",
-            "Apply Update",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Question);
-
-        if (confirm != DialogResult.Yes)
+        if (!skipConfirmation)
         {
-            return;
+            var confirm = MessageBox.Show(
+                $"Apply update to v{FormatVersion(_lastUpdateResult.LatestVersion)} now?\n\nThe app will restart automatically.",
+                "Apply Update",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (confirm != DialogResult.Yes)
+            {
+                return;
+            }
         }
 
         await RunOperationAsync(
@@ -761,6 +837,7 @@ public sealed class MainForm : Form
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
 
+                _allowClose = true;
                 Close();
             });
     }
@@ -794,6 +871,105 @@ public sealed class MainForm : Form
             SetControlsEnabled(true);
             _isOperationRunning = false;
         }
+    }
+
+    private async Task PromptForStartupUpdateAsync(UpdateCheckResult result)
+    {
+        var latest = FormatVersion(result.LatestVersion);
+        var current = FormatVersion(result.CurrentVersion);
+        var prompt = MessageBox.Show(
+            $"A new version is available.\n\nCurrent: v{current}\nLatest: v{latest}\n\nDo you want to install the update now?",
+            "Update Available",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information);
+
+        if (prompt == DialogResult.Yes)
+        {
+            await ApplyUpdateAsync(skipConfirmation: true);
+        }
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        FlushPendingCredentialPersistence();
+
+        if (_allowClose || e.CloseReason != CloseReason.UserClosing)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        HideToTray();
+    }
+
+    private NotifyIcon CreateTrayIcon()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Open", null, (_, _) => RestoreFromTray());
+        menu.Items.Add("Exit", null, (_, _) =>
+        {
+            _allowClose = true;
+            Close();
+        });
+
+        var tray = new NotifyIcon
+        {
+            Text = "Windows Keep Alive",
+            ContextMenuStrip = menu,
+            Icon = Icon ?? SystemIcons.Application,
+            Visible = false,
+        };
+        tray.DoubleClick += (_, _) => RestoreFromTray();
+        return tray;
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        _trayIcon.Visible = true;
+
+        if (_trayHintShown)
+        {
+            return;
+        }
+
+        _trayHintShown = true;
+        _trayIcon.ShowBalloonTip(
+            2500,
+            "Windows Keep Alive",
+            "The app is still running in the notification area.",
+            ToolTipIcon.Info);
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        WindowState = FormWindowState.Normal;
+        ShowInTaskbar = true;
+        _trayIcon.Visible = false;
+        Activate();
+    }
+
+    private void QueueCredentialPersistence()
+    {
+        if (_suppressCredentialPersistence)
+        {
+            return;
+        }
+
+        _credentialPersistTimer.Stop();
+        _credentialPersistTimer.Start();
+    }
+
+    private void FlushPendingCredentialPersistence()
+    {
+        if (_credentialPersistTimer.Enabled)
+        {
+            _credentialPersistTimer.Stop();
+        }
+
+        PersistCredentialInputs();
     }
 
     private void RefreshServiceStatus()
@@ -913,6 +1089,8 @@ public sealed class MainForm : Form
             AccountType: option.Type,
             Domain: _domainTextBox.Text.Trim());
 
+        FlushPendingCredentialPersistence();
+
         return true;
     }
 
@@ -959,6 +1137,88 @@ public sealed class MainForm : Form
         }
     }
 
+    private void LoadSavedCredentialInputs()
+    {
+        _suppressCredentialPersistence = true;
+        try
+        {
+            _usernameTextBox.Text = string.IsNullOrWhiteSpace(_settings.SavedUsername)
+                ? Environment.UserName
+                : _settings.SavedUsername;
+
+            var savedType = ParseSavedAccountType(_settings.SavedAccountType);
+            SelectAccountType(savedType ?? AccountType.MicrosoftAccount);
+
+            ApplyAccountTypeDefaults();
+
+            if (!string.IsNullOrWhiteSpace(_settings.SavedDomain))
+            {
+                _domainTextBox.Text = _settings.SavedDomain;
+            }
+
+            var savedPassword = _settings.GetSavedPassword();
+            if (!string.IsNullOrEmpty(savedPassword))
+            {
+                _passwordTextBox.Text = savedPassword;
+            }
+        }
+        finally
+        {
+            _suppressCredentialPersistence = false;
+        }
+
+        PersistCredentialInputs();
+    }
+
+    private void PersistCredentialInputs()
+    {
+        if (_suppressCredentialPersistence)
+        {
+            return;
+        }
+
+        try
+        {
+            _settings.SavedUsername = _usernameTextBox.Text.Trim();
+            _settings.SavedDomain = _domainTextBox.Text.Trim();
+            if (_accountTypeComboBox.SelectedItem is AccountTypeOption option)
+            {
+                _settings.SavedAccountType = option.Type.ToString();
+            }
+
+            _settings.SetSavedPassword(_passwordTextBox.Text);
+            _settings.Save();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Could not persist credential inputs: {ex.Message}");
+        }
+    }
+
+    private static AccountType? ParseSavedAccountType(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return Enum.TryParse<AccountType>(raw, ignoreCase: true, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private void SelectAccountType(AccountType type)
+    {
+        for (var i = 0; i < _accountTypeComboBox.Items.Count; i++)
+        {
+            if (_accountTypeComboBox.Items[i] is AccountTypeOption option && option.Type == type)
+            {
+                _accountTypeComboBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
     private void TryApplyAppIcon()
     {
         try
@@ -991,8 +1251,12 @@ public sealed class MainForm : Form
 
     private void RestoreConsoleOutput()
     {
+        FlushPendingCredentialPersistence();
         _updateTimer.Stop();
         _logTimer.Stop();
+        _credentialPersistTimer.Stop();
+        _trayIcon.Visible = false;
+        _trayIcon.Dispose();
         Console.SetOut(_originalConsoleOut);
         Console.SetError(_originalConsoleError);
         _updateChecker.Dispose();

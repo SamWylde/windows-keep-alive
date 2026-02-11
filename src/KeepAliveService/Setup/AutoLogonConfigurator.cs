@@ -354,9 +354,8 @@ public static class AutoLogonConfigurator
             var version = typeof(AutoLogonConfigurator).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"KeepAliveService/{version}");
 
-            using var response = httpClient
-                .GetAsync("https://live.sysinternals.com/Autologon64.exe", HttpCompletionOption.ResponseHeadersRead)
-                .Result;
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://live.sysinternals.com/Autologon64.exe");
+            using var response = httpClient.Send(request, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
 
             var contentLength = response.Content.Headers.ContentLength;
@@ -482,17 +481,43 @@ public static class AutoLogonConfigurator
             psi.ArgumentList.Add("/accepteula");
 
             using var process = Process.Start(psi);
-            process?.WaitForExit(30_000);
+            if (process == null)
+            {
+                WriteError("Failed to start Autologon64.exe.");
+                _failures++;
+                return;
+            }
 
-            if (process?.ExitCode == 0)
+            var errorReadTask = process.StandardError.ReadToEndAsync();
+            var outputReadTask = process.StandardOutput.ReadToEndAsync();
+
+            if (!process.WaitForExit(30_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+
+                WriteError("Autologon timed out after 30 seconds.");
+                _failures++;
+                return;
+            }
+
+            Task.WaitAll([errorReadTask, outputReadTask], 5000);
+            var error = errorReadTask.Result.Trim();
+            var output = outputReadTask.Result.Trim();
+
+            if (process.ExitCode == 0)
             {
                 WriteSuccess("Autologon configured (credentials stored encrypted as LSA secrets)");
             }
             else
             {
-                var error = process?.StandardError.ReadToEnd()?.Trim();
-                var output = process?.StandardOutput.ReadToEnd()?.Trim();
-                WriteError($"Autologon failed (exit code {process?.ExitCode})");
+                WriteError($"Autologon failed (exit code {process.ExitCode})");
                 if (!string.IsNullOrEmpty(error)) Console.WriteLine($"    Error: {error}");
                 if (!string.IsNullOrEmpty(output)) Console.WriteLine($"    Output: {output}");
 
