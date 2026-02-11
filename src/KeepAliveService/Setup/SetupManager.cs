@@ -1,13 +1,18 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.ServiceProcess;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
 
 public static class SetupManager
 {
+    private static int _criticalFailures;
+
     public static void RunSetup()
     {
+        _criticalFailures = 0;
+
         Console.WriteLine();
         Console.WriteLine("========================================");
         Console.WriteLine("  Windows Keep Alive - Setup");
@@ -16,31 +21,51 @@ public static class SetupManager
         // Step 0: Preflight checks
         if (!RunPreflightChecks())
         {
+            Environment.Exit(1);
             return;
         }
 
         // Step 1: Windows Update policy
-        try { UpdatePolicyConfigurator.Configure(); }
-        catch (Exception ex) { WriteError($"Update policy configuration failed: {ex.Message}"); }
+        if (!TryRun("Windows Update policy", UpdatePolicyConfigurator.Configure))
+            _criticalFailures++;
 
         // Step 2: Auto-login + ARSO + lock screen
-        try { AutoLogonConfigurator.Configure(); }
-        catch (Exception ex) { WriteError($"Auto-login configuration failed: {ex.Message}"); }
+        if (!TryRun("Auto-login configuration", AutoLogonConfigurator.Configure))
+            _criticalFailures++;
 
         // Step 3: Power settings
-        try { PowerConfigurator.Configure(); }
-        catch (Exception ex) { WriteError($"Power configuration failed: {ex.Message}"); }
+        if (!TryRun("Power settings", PowerConfigurator.Configure))
+            _criticalFailures++;
 
         // Step 4: Network / WiFi
-        try { NetworkConfigurator.Configure(); }
-        catch (Exception ex) { WriteError($"Network configuration failed: {ex.Message}"); }
+        // Non-critical: WiFi config failure shouldn't block setup
+        TryRun("Network configuration", NetworkConfigurator.Configure);
 
         // Step 5: Install self as service
-        try { ServiceInstaller.Install(); }
-        catch (Exception ex) { WriteError($"Service installation failed: {ex.Message}"); }
+        if (!TryRun("Service installation", ServiceInstaller.Install))
+            _criticalFailures++;
 
-        // Summary
+        // Summary - conditional on success/failure
         PrintSummary();
+
+        if (_criticalFailures > 0)
+        {
+            Environment.Exit(1);
+        }
+    }
+
+    private static bool TryRun(string stepName, Action action)
+    {
+        try
+        {
+            action();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            WriteError($"{stepName} failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool RunPreflightChecks()
@@ -72,6 +97,12 @@ public static class SetupManager
 
         // Check Windows edition
         if (!CheckWindowsEdition())
+        {
+            return false;
+        }
+
+        // Check TeamViewer is installed
+        if (!CheckTeamViewerInstalled())
         {
             return false;
         }
@@ -144,6 +175,76 @@ public static class SetupManager
         }
     }
 
+    private static bool CheckTeamViewerInstalled()
+    {
+        // Check if TeamViewer service exists
+        try
+        {
+            using var sc = new ServiceController("TeamViewer");
+            _ = sc.Status;
+            WriteSuccess($"TeamViewer service found (status: {sc.Status})");
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            // Service not installed - check for executable
+        }
+
+        // Check for TeamViewer process
+        var procs = Process.GetProcessesByName("TeamViewer_Service");
+        if (procs.Length > 0)
+        {
+            foreach (var p in procs) p.Dispose();
+            WriteSuccess("TeamViewer process found running");
+            return true;
+        }
+
+        var uiProcs = Process.GetProcessesByName("TeamViewer");
+        if (uiProcs.Length > 0)
+        {
+            foreach (var p in uiProcs) p.Dispose();
+            WriteSuccess("TeamViewer process found running");
+            return true;
+        }
+
+        // Check for TeamViewer executable in common locations
+        string[] commonPaths =
+        [
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "TeamViewer", "TeamViewer.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "TeamViewer", "TeamViewer.exe"),
+        ];
+
+        foreach (var path in commonPaths)
+        {
+            if (File.Exists(path))
+            {
+                WriteSuccess($"TeamViewer found at: {path}");
+                return true;
+            }
+        }
+
+        // Check registry
+        string[] registryPaths = [@"SOFTWARE\TeamViewer", @"SOFTWARE\WOW6432Node\TeamViewer"];
+        foreach (var regPath in registryPaths)
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(regPath);
+            if (key?.GetValue("InstallationDirectory") is string installDir)
+            {
+                var fullPath = Path.Combine(installDir, "TeamViewer.exe");
+                if (File.Exists(fullPath))
+                {
+                    WriteSuccess($"TeamViewer found at: {fullPath}");
+                    return true;
+                }
+            }
+        }
+
+        WriteError("TeamViewer is not installed. Install TeamViewer before running setup.");
+        Console.WriteLine("    Download from: https://www.teamviewer.com/en/download/");
+        Console.WriteLine("    The watchdog cannot guarantee TeamViewer availability without it.");
+        return false;
+    }
+
     private static void CheckBlockers()
     {
         try
@@ -162,6 +263,7 @@ public static class SetupManager
                 Console.WriteLine("    Auto-login will NOT work until this is removed.");
                 Console.WriteLine("    This is typically set by enterprise Group Policy.");
                 Console.WriteLine("    Registry: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
+                _criticalFailures++;
             }
             else
             {
@@ -227,21 +329,39 @@ public static class SetupManager
     {
         Console.WriteLine();
         Console.WriteLine("========================================");
-        Console.WriteLine("  Setup Complete!");
-        Console.WriteLine("========================================");
-        Console.WriteLine();
-        Console.WriteLine("  What was configured:");
-        Console.WriteLine("    - Windows Update: auto-restart blocked when logged in");
-        Console.WriteLine("    - Auto-login: credentials stored encrypted via Autologon");
-        Console.WriteLine("    - ARSO: Windows will auto-sign-in after update reboots");
-        Console.WriteLine("    - Lock screen: disabled");
-        Console.WriteLine("    - Power: sleep/hibernate/lid-close all set to never/do nothing");
-        Console.WriteLine("    - WiFi: power saving set to Maximum Performance");
-        Console.WriteLine("    - KeepAlive service: installed, running, auto-start");
-        Console.WriteLine();
-        Console.WriteLine("  The KeepAlive service is now:");
-        Console.WriteLine("    - Preventing system sleep via SetThreadExecutionState API");
-        Console.WriteLine("    - Watching TeamViewer and restarting it if it stops");
+
+        if (_criticalFailures > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Setup completed with {_criticalFailures} CRITICAL FAILURE(S)");
+            Console.ResetColor();
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+            Console.WriteLine("  Some steps failed. The system may NOT be fully configured.");
+            Console.WriteLine("  Review the [FAIL] messages above and fix the issues,");
+            Console.WriteLine("  then re-run: KeepAliveService.exe --setup");
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("  Setup Complete!");
+            Console.ResetColor();
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+            Console.WriteLine("  What was configured:");
+            Console.WriteLine("    - Windows Update: auto-restart blocked when logged in");
+            Console.WriteLine("    - Auto-login: credentials stored encrypted via Autologon");
+            Console.WriteLine("    - ARSO: Windows will auto-sign-in after update reboots");
+            Console.WriteLine("    - Lock screen: disabled");
+            Console.WriteLine("    - Power: sleep/hibernate/lid-close all set to never/do nothing");
+            Console.WriteLine("    - WiFi: power saving set to Maximum Performance");
+            Console.WriteLine("    - KeepAlive service: installed, running, auto-start");
+            Console.WriteLine();
+            Console.WriteLine("  The KeepAlive service is now:");
+            Console.WriteLine("    - Preventing system sleep via SetThreadExecutionState API");
+            Console.WriteLine("    - Watching TeamViewer and restarting it if it stops");
+        }
+
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("  IMPORTANT: Restart your PC to verify auto-login works!");

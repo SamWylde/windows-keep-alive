@@ -40,7 +40,7 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(PasswordlessPath, writable: true);
             key?.SetValue("DevicePasswordLessBuildVersion", 0, RegistryValueKind.DWord);
-            WriteSuccess("Windows Hello passwordless requirement → Disabled");
+            WriteSuccess("Windows Hello passwordless requirement -> Disabled");
         }
         catch (Exception ex)
         {
@@ -56,7 +56,7 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(SystemPolicyPath, writable: true);
             key?.SetValue("DisableAutomaticRestartSignOn", 0, RegistryValueKind.DWord);
-            WriteSuccess("ARSO (Automatic Restart Sign-On) → Enabled");
+            WriteSuccess("ARSO (Automatic Restart Sign-On) -> Enabled");
         }
         catch (Exception ex)
         {
@@ -71,31 +71,34 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(PersonalizationPath, writable: true);
             key?.SetValue("NoLockScreen", 1, RegistryValueKind.DWord);
-            WriteSuccess("Lock screen → Disabled");
+            WriteSuccess("Lock screen -> Disabled");
         }
         catch (Exception ex)
         {
             WriteError($"Disable lock screen - {ex.Message}");
         }
 
-        // Disable workstation locking (Ctrl+Alt+Del → Lock)
+        // Disable workstation locking (Ctrl+Alt+Del -> Lock)
         try
         {
             using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
             key?.SetValue("DisableLockWorkstation", 1, RegistryValueKind.DWord);
-            WriteSuccess("Workstation lock → Disabled");
+            WriteSuccess("Workstation lock -> Disabled");
         }
         catch (Exception ex)
         {
             WriteError($"Disable workstation lock - {ex.Message}");
         }
 
-        // Disable screen saver password requirement
+        // Disable screen saver password requirement via machine-wide policy
+        // Using HKLM policy instead of HKCU so it applies to the autologon user,
+        // not just the admin account running setup.
         try
         {
-            using var key = Registry.CurrentUser.CreateSubKey(@"Control Panel\Desktop", writable: true);
+            using var key = Registry.LocalMachine.CreateSubKey(
+                @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop", writable: true);
             key?.SetValue("ScreenSaverIsSecure", "0", RegistryValueKind.String);
-            WriteSuccess("Screen saver password → Disabled");
+            WriteSuccess("Screen saver password -> Disabled (machine policy)");
         }
         catch (Exception ex)
         {
@@ -133,12 +136,12 @@ public static class AutoLogonConfigurator
         if (username.Contains('@'))
         {
             domain = "MicrosoftAccount";
-            Console.WriteLine($"  Detected Microsoft account → Domain: {domain}");
+            Console.WriteLine($"  Detected Microsoft account -> Domain: {domain}");
         }
         else
         {
             domain = Environment.MachineName;
-            Console.WriteLine($"  Detected local account → Domain: {domain}");
+            Console.WriteLine($"  Detected local account -> Domain: {domain}");
         }
 
         Console.Write("  Password: ");
@@ -159,7 +162,7 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
             key?.SetValue("ForceAutoLogon", "1", RegistryValueKind.String);
-            WriteSuccess("ForceAutoLogon → Enabled");
+            WriteSuccess("ForceAutoLogon -> Enabled");
         }
         catch (Exception ex)
         {
@@ -259,14 +262,25 @@ public static class AutoLogonConfigurator
             var autoAdminLogon = key?.GetValue("AutoAdminLogon") as string;
             var defaultUserName = key?.GetValue("DefaultUserName") as string;
 
-            if (autoAdminLogon == "1" && !string.IsNullOrEmpty(defaultUserName))
+            if (autoAdminLogon != "1")
             {
-                WriteSuccess($"Auto-login verified for user: {defaultUserName}");
+                WriteError($"Auto-login verification failed: AutoAdminLogon={autoAdminLogon ?? "(not set)"} (expected 1)");
+                return;
             }
-            else
+
+            if (string.IsNullOrEmpty(defaultUserName))
             {
-                WriteWarning($"Auto-login verification: AutoAdminLogon={autoAdminLogon}, DefaultUserName={defaultUserName}");
+                WriteError("Auto-login verification failed: DefaultUserName is not set");
+                return;
             }
+
+            if (!string.Equals(defaultUserName, expectedUsername, StringComparison.OrdinalIgnoreCase))
+            {
+                WriteWarning($"Auto-login user mismatch: configured={defaultUserName}, expected={expectedUsername}");
+                return;
+            }
+
+            WriteSuccess($"Auto-login verified for user: {defaultUserName}");
         }
         catch (Exception ex)
         {

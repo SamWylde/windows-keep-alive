@@ -39,11 +39,11 @@ public static class ServiceInstaller
 
         // Configure failure recovery: restart after 5s, 30s, 60s. Reset counter after 24 hours.
         RunSc($"failure {ServiceName} reset= 86400 actions= restart/5000/restart/30000/restart/60000",
-            "Failure recovery → Restart after 5s/30s/60s");
+            "Failure recovery -> Restart after 5s/30s/60s");
 
         // Enable failure actions even on non-crash exits
         RunSc($"failureflag {ServiceName} 1",
-            "Failure flag → Enabled (recover from all failures)");
+            "Failure flag -> Enabled (recover from all failures)");
 
         // Start the service
         try
@@ -130,8 +130,26 @@ public static class ServiceInstaller
 
     private static string? GetServiceExePath()
     {
-        // Use the current executable's path
         var exePath = Environment.ProcessPath;
+
+        // Reject if running via dotnet.exe (e.g. "dotnet run") - the service
+        // would register dotnet.exe as the binary, which is wrong.
+        if (exePath != null &&
+            Path.GetFileName(exePath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteWarning("Running via 'dotnet run' - cannot register dotnet.exe as a service.");
+            WriteInfo("Build a published exe first: dotnet publish -c Release -o publish --self-contained true -p:PublishSingleFile=true");
+
+            // Fall back to looking for a published exe
+            var assemblyDir = AppContext.BaseDirectory;
+            var candidatePath = Path.Combine(assemblyDir, "KeepAliveService.exe");
+            if (File.Exists(candidatePath))
+            {
+                return candidatePath;
+            }
+
+            return null;
+        }
 
         if (exePath != null && File.Exists(exePath) && exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
         {
@@ -139,11 +157,11 @@ public static class ServiceInstaller
         }
 
         // Fallback: look for published exe next to the running assembly
-        var assemblyDir = AppContext.BaseDirectory;
-        var candidatePath = Path.Combine(assemblyDir, "KeepAliveService.exe");
-        if (File.Exists(candidatePath))
+        var fallbackDir = AppContext.BaseDirectory;
+        var fallbackPath = Path.Combine(fallbackDir, "KeepAliveService.exe");
+        if (File.Exists(fallbackPath))
         {
-            return candidatePath;
+            return fallbackPath;
         }
 
         return null;

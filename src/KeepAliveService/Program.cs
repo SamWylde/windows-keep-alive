@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using KeepAliveService.Services;
 using KeepAliveService.Setup;
 
@@ -18,10 +19,12 @@ if (args.Length > 0)
             return;
 
         case "--update-password":
+            RequireAdmin("--update-password");
             AutoLogonConfigurator.UpdatePassword();
             return;
 
         case "--uninstall":
+            RequireAdmin("--uninstall");
             ServiceInstaller.Uninstall();
             return;
 
@@ -59,6 +62,21 @@ builder.Logging.AddEventLog(settings =>
 
 var host = builder.Build();
 host.Run();
+
+static void RequireAdmin(string command)
+{
+    using var identity = WindowsIdentity.GetCurrent();
+    var principal = new WindowsPrincipal(identity);
+    if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Write("  [FAIL] ");
+        Console.ResetColor();
+        Console.WriteLine($"'{command}' requires Administrator privileges.");
+        Console.WriteLine("  Right-click the executable and select 'Run as administrator'.");
+        Environment.Exit(1);
+    }
+}
 
 static void PrintHelp()
 {
