@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -8,6 +8,9 @@
     <RootNamespace>KeepAliveService</RootNamespace>
     <AssemblyName>KeepAliveService</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
