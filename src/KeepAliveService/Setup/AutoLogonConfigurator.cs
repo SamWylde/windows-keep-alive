@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -11,8 +11,12 @@ public static class AutoLogonConfigurator
     private const string PersonalizationPath = @"SOFTWARE\Policies\Microsoft\Windows\Personalization";
     private const string SystemPolicyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
 
-    public static void Configure()
+    private static int _failures;
+
+    public static bool Configure()
     {
+        _failures = 0;
+
         Console.WriteLine();
         Console.WriteLine("=== Auto-Login Configuration ===");
 
@@ -20,6 +24,8 @@ public static class AutoLogonConfigurator
         EnableArso();
         DisableLockScreen();
         ConfigureAutoLogon();
+
+        return _failures == 0;
     }
 
     /// <summary>
@@ -45,6 +51,7 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteError($"Disable Windows Hello requirement - {ex.Message}");
+            _failures++;
         }
     }
 
@@ -61,6 +68,7 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteError($"Enable ARSO - {ex.Message}");
+            _failures++;
         }
     }
 
@@ -76,6 +84,7 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteError($"Disable lock screen - {ex.Message}");
+            _failures++;
         }
 
         // Disable workstation locking (Ctrl+Alt+Del -> Lock)
@@ -88,6 +97,7 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteError($"Disable workstation lock - {ex.Message}");
+            _failures++;
         }
 
         // Disable screen saver password requirement via machine-wide policy
@@ -113,14 +123,21 @@ public static class AutoLogonConfigurator
         if (autologonPath == null)
         {
             WriteError("Cannot proceed without Autologon64.exe");
+            _failures++;
+            return;
+        }
+
+        // Verify Authenticode signature
+        if (!VerifyAuthenticodeSignature(autologonPath))
+        {
+            _failures++;
             return;
         }
 
         // Prompt for credentials
         Console.WriteLine();
         Console.WriteLine("  Enter your Windows login credentials.");
-        Console.WriteLine("  For Microsoft accounts, use your email address as the username.");
-        Console.WriteLine("  The password is your Microsoft account password, NOT your PIN.");
+        Console.WriteLine("  The password is your Windows/Microsoft account password, NOT your PIN.");
         Console.WriteLine();
 
         Console.Write("  Username: ");
@@ -128,21 +145,41 @@ public static class AutoLogonConfigurator
         if (string.IsNullOrEmpty(username))
         {
             WriteError("Username cannot be empty");
+            _failures++;
             return;
         }
 
-        // Auto-detect domain
+        // Prompt for account type instead of guessing from username
+        Console.WriteLine();
+        Console.WriteLine("  Account type:");
+        Console.WriteLine("    1. Microsoft account (e.g., user@outlook.com, user@hotmail.com)");
+        Console.WriteLine("    2. Local Windows account");
+        Console.WriteLine("    3. Domain / Azure AD / Work account (e.g., user@company.com)");
+        Console.Write("  Select (1/2/3): ");
+        var accountChoice = Console.ReadLine()?.Trim();
+
         string domain;
-        if (username.Contains('@'))
+        switch (accountChoice)
         {
-            domain = "MicrosoftAccount";
-            Console.WriteLine($"  Detected Microsoft account -> Domain: {domain}");
+            case "1":
+                domain = "MicrosoftAccount";
+                break;
+            case "2":
+                domain = Environment.MachineName;
+                break;
+            case "3":
+                var detectedDomain = Environment.UserDomainName;
+                Console.Write($"  Domain name [{detectedDomain}]: ");
+                var customDomain = Console.ReadLine()?.Trim();
+                domain = string.IsNullOrEmpty(customDomain) ? detectedDomain : customDomain;
+                break;
+            default:
+                WriteError("Invalid selection. Please enter 1, 2, or 3.");
+                _failures++;
+                return;
         }
-        else
-        {
-            domain = Environment.MachineName;
-            Console.WriteLine($"  Detected local account -> Domain: {domain}");
-        }
+
+        Console.WriteLine($"  Using domain: {domain}");
 
         Console.Write("  Password: ");
         var password = ReadPasswordMasked();
@@ -151,8 +188,14 @@ public static class AutoLogonConfigurator
         if (string.IsNullOrEmpty(password))
         {
             WriteError("Password cannot be empty");
+            _failures++;
             return;
         }
+
+        // Warn about brief command-line exposure
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("  Note: The password will briefly appear in the process list while Autologon64.exe runs.");
+        Console.ResetColor();
 
         // Run Autologon64.exe (stores credentials encrypted as LSA secrets)
         RunAutologon(autologonPath, username, domain, password);
@@ -167,6 +210,7 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteError($"Set ForceAutoLogon - {ex.Message}");
+            _failures++;
         }
 
         // Verify configuration
@@ -212,14 +256,46 @@ public static class AutoLogonConfigurator
         }
     }
 
+    private static bool VerifyAuthenticodeSignature(string filePath)
+    {
+        try
+        {
+            var cert = X509Certificate.CreateFromSignedFile(filePath);
+            var subject = cert.Subject;
+
+            if (subject.Contains("Microsoft", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteSuccess("Autologon64.exe signature verified (Microsoft)");
+                return true;
+            }
+            else
+            {
+                WriteError($"Autologon64.exe is signed but NOT by Microsoft: {subject}");
+                Console.WriteLine("    The file may have been tampered with. Deleting it.");
+                try { File.Delete(filePath); } catch { }
+                return false;
+            }
+        }
+        catch (Exception)
+        {
+            WriteError("Autologon64.exe has no valid digital signature or is corrupted.");
+            Console.WriteLine("    The file may have been tampered with. Deleting it.");
+            try { File.Delete(filePath); } catch { }
+            return false;
+        }
+    }
+
     private static void RunAutologon(string autologonPath, string username, string domain, string password)
     {
         try
         {
+            // Escape embedded double quotes in password to prevent argument parsing issues
+            var escapedPassword = password.Replace("\"", "\\\"");
+
             var psi = new ProcessStartInfo
             {
                 FileName = autologonPath,
-                Arguments = $"\"{username}\" \"{domain}\" \"{password}\" /accepteula",
+                Arguments = $"\"{username}\" \"{domain}\" \"{escapedPassword}\" /accepteula",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -246,11 +322,13 @@ public static class AutoLogonConfigurator
                 Console.WriteLine("  1. Open 'System Information' (msinfo32)");
                 Console.WriteLine("  2. Look for 'Credential Guard' under 'Virtualization-based security Services Running'");
                 Console.WriteLine("  3. If present, you may need to disable it for auto-login to work.");
+                _failures++;
             }
         }
         catch (Exception ex)
         {
             WriteError($"Failed to run Autologon: {ex.Message}");
+            _failures++;
         }
     }
 

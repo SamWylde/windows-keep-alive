@@ -5,8 +5,11 @@ namespace KeepAliveService.Setup;
 
 public static class NetworkConfigurator
 {
-    public static void Configure()
+    private static int _failures;
+
+    public static bool Configure()
     {
+        _failures = 0;
         Console.WriteLine();
         Console.WriteLine("=== Network / WiFi Configuration ===");
 
@@ -35,6 +38,8 @@ public static class NetworkConfigurator
 
         // Disable WiFi adapter power management via registry (the real fix)
         DisableAdapterPowerManagement();
+
+        return _failures == 0;
     }
 
     private static void DisableAdapterPowerManagement()
@@ -93,6 +98,7 @@ public static class NetworkConfigurator
         catch (UnauthorizedAccessException)
         {
             WriteError("Cannot modify adapter power management - access denied (run as Administrator)");
+            _failures++;
         }
         catch (Exception ex)
         {
@@ -124,11 +130,13 @@ public static class NetworkConfigurator
             else
             {
                 WriteWarning($"{description} - powercfg returned exit code {process?.ExitCode}");
+                _failures++;
             }
         }
         catch (Exception ex)
         {
             WriteError($"{description} - {ex.Message}");
+            _failures++;
         }
     }
 

@@ -4,8 +4,11 @@ namespace KeepAliveService.Setup;
 
 public static class PowerConfigurator
 {
-    public static void Configure()
+    private static int _failures;
+
+    public static bool Configure()
     {
+        _failures = 0;
         Console.WriteLine();
         Console.WriteLine("=== Power Settings ===");
 
@@ -38,6 +41,8 @@ public static class PowerConfigurator
 
         // Apply all changes
         RunPowerCfg("/setactive SCHEME_CURRENT", "Applied power scheme changes");
+
+        return _failures == 0;
     }
 
     private static void RunPowerCfg(string arguments, string description)
@@ -65,11 +70,13 @@ public static class PowerConfigurator
             {
                 var error = process?.StandardError.ReadToEnd()?.Trim();
                 WriteWarning($"{description} - powercfg returned exit code {process?.ExitCode}: {error}");
+                _failures++;
             }
         }
         catch (Exception ex)
         {
             WriteError($"{description} - {ex.Message}");
+            _failures++;
         }
     }
 

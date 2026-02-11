@@ -9,7 +9,7 @@ public static class ServiceInstaller
     private const string DisplayName = "Keep Alive Watchdog";
     private const string Description = "Prevents system sleep and keeps TeamViewer running. Part of windows-keep-alive.";
 
-    public static void Install()
+    public static bool Install()
     {
         Console.WriteLine();
         Console.WriteLine("=== Service Installation ===");
@@ -18,7 +18,7 @@ public static class ServiceInstaller
         if (exePath == null)
         {
             WriteError("Could not determine service executable path");
-            return;
+            return false;
         }
 
         WriteInfo($"Service executable: {exePath}");
@@ -31,7 +31,7 @@ public static class ServiceInstaller
                 "Service created"))
         {
             WriteError("Failed to create service. Ensure you are running as Administrator.");
-            return;
+            return false;
         }
 
         // Set description
@@ -52,11 +52,13 @@ public static class ServiceInstaller
             sc.Start();
             sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
             WriteSuccess($"Service started and running");
+            return true;
         }
         catch (Exception ex)
         {
             WriteError($"Failed to start service: {ex.Message}");
             Console.WriteLine("  Try starting it manually: sc start KeepAliveService");
+            return false;
         }
     }
 

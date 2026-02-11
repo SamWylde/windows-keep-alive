@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.ServiceProcess;
-using Microsoft.Win32;
 
 namespace KeepAliveService.Services;
 
@@ -98,14 +97,14 @@ public class ProcessWatchdogWorker : BackgroundService
             return;
         }
 
-        // Try restarting via Windows Service Controller first
-        if (TryRestartViaServiceController())
+        // Try restarting via Windows Service Controller (only reliable method from session 0)
+        if (!TryRestartViaServiceController())
         {
-            return;
+            _logger.LogError(
+                "Could not restart TeamViewer via Service Controller. " +
+                "Launching executables from session 0 (service context) is unreliable. " +
+                "Ensure TeamViewer is installed as a Windows Service.");
         }
-
-        // Fallback: launch executable directly
-        TryLaunchExecutable();
     }
 
     private static bool IsTeamViewerServiceRunning()
@@ -160,75 +159,6 @@ public class ProcessWatchdogWorker : BackgroundService
         }
 
         return false;
-    }
-
-    private bool TryLaunchExecutable()
-    {
-        var exePath = FindTeamViewerPath();
-        if (exePath == null)
-        {
-            _logger.LogError("Could not find TeamViewer installation path");
-            return false;
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = exePath,
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            });
-            _logger.LogInformation("TeamViewer launched from {Path}", exePath);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to launch TeamViewer from {Path}", exePath);
-            return false;
-        }
-    }
-
-    private static string? FindTeamViewerPath()
-    {
-        // Strategy 1: Common install locations
-        string[] commonPaths =
-        [
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "TeamViewer", "TeamViewer.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "TeamViewer", "TeamViewer.exe"),
-        ];
-
-        foreach (var path in commonPaths)
-        {
-            if (File.Exists(path))
-                return path;
-        }
-
-        // Strategy 2: TeamViewer registry key
-        string[] registryPaths =
-        [
-            @"SOFTWARE\TeamViewer",
-            @"SOFTWARE\WOW6432Node\TeamViewer",
-        ];
-
-        foreach (var regPath in registryPaths)
-        {
-            using var key = Registry.LocalMachine.OpenSubKey(regPath);
-            if (key?.GetValue("InstallationDirectory") is string installDir)
-            {
-                var fullPath = Path.Combine(installDir, "TeamViewer.exe");
-                if (File.Exists(fullPath))
-                    return fullPath;
-            }
-        }
-
-        // Strategy 3: App Paths registry
-        using var appPathKey = Registry.LocalMachine.OpenSubKey(
-            @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\TeamViewer.exe");
-        if (appPathKey?.GetValue(null) is string appPath && File.Exists(appPath))
-            return appPath;
-
-        return null;
     }
 
     private void RecordFailure()

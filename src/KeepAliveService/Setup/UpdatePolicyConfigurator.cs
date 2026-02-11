@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -8,13 +7,18 @@ public static class UpdatePolicyConfigurator
     private const string AuPolicyPath = @"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
     private const string UxSettingsPath = @"SOFTWARE\Microsoft\WindowsUpdate\UX\Settings";
 
-    public static void Configure()
+    private static int _failures;
+
+    public static bool Configure()
     {
+        _failures = 0;
+
         Console.WriteLine();
         Console.WriteLine("=== Windows Update Policy ===");
 
         ConfigureRegistrySettings();
-        DisableRebootScheduledTask();
+
+        return _failures == 0;
     }
 
     private static void ConfigureRegistrySettings()
@@ -43,39 +47,6 @@ public static class UpdatePolicyConfigurator
             "Active hours -> Enabled");
     }
 
-    private static void DisableRebootScheduledTask()
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "schtasks.exe",
-                Arguments = @"/Change /TN ""\Microsoft\Windows\UpdateOrchestrator\Reboot"" /Disable",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            process?.WaitForExit(10_000);
-
-            if (process?.ExitCode == 0)
-            {
-                WriteSuccess("UpdateOrchestrator\\Reboot task -> Disabled");
-            }
-            else
-            {
-                // Task may not exist on all Windows builds
-                WriteWarning("UpdateOrchestrator\\Reboot task not found or could not be disabled (may not exist on this build)");
-            }
-        }
-        catch (Exception ex)
-        {
-            WriteWarning($"Could not disable reboot task: {ex.Message}");
-        }
-    }
-
     private static void SetRegistryDword(RegistryKey root, string path, string name, int value, string description)
     {
         try
@@ -84,6 +55,7 @@ public static class UpdatePolicyConfigurator
             if (key == null)
             {
                 WriteError($"{description} - Could not create/open registry key");
+                _failures++;
                 return;
             }
 
@@ -93,10 +65,12 @@ public static class UpdatePolicyConfigurator
         catch (UnauthorizedAccessException)
         {
             WriteError($"{description} - Access denied (run as Administrator)");
+            _failures++;
         }
         catch (Exception ex)
         {
             WriteError($"{description} - {ex.Message}");
+            _failures++;
         }
     }
 
@@ -104,14 +78,6 @@ public static class UpdatePolicyConfigurator
     {
         Console.ForegroundColor = ConsoleColor.Green;
         Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
         Console.ResetColor();
         Console.WriteLine(message);
     }
