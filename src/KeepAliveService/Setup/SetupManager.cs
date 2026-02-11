@@ -45,6 +45,15 @@ public static class SetupManager
         if (!TryRun("Service installation", ServiceInstaller.Install))
             _criticalFailures++;
 
+        // Step 6: Run compliance check to verify everything was applied correctly
+        Console.WriteLine();
+        Console.WriteLine("=== Post-Setup Verification ===");
+        var complianceResult = ComplianceChecker.RunCheck();
+        if (complianceResult != 0 && _criticalFailures == 0)
+        {
+            WriteWarning("Some compliance checks failed - review the results above");
+        }
+
         // Summary - conditional on success/failure
         PrintSummary();
 
@@ -54,12 +63,11 @@ public static class SetupManager
         }
     }
 
-    private static bool TryRun(string stepName, Action action)
+    private static bool TryRun(string stepName, Func<bool> action)
     {
         try
         {
-            action();
-            return true;
+            return action();
         }
         catch (Exception ex)
         {
@@ -107,10 +115,13 @@ public static class SetupManager
             return false;
         }
 
-        // Check for auto-login blockers
-        CheckBlockers();
+        // Check for auto-login blockers (hard stop if LegalNotice is set)
+        if (!CheckBlockers())
+        {
+            return false;
+        }
 
-        // Check for Credential Guard
+        // Check for Credential Guard (warning only - continues)
         CheckCredentialGuard();
 
         return true;
@@ -239,20 +250,29 @@ public static class SetupManager
             }
         }
 
+        // Check App Paths registry
+        using var appPathKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\TeamViewer.exe");
+        if (appPathKey?.GetValue(null) is string appPath && File.Exists(appPath))
+        {
+            WriteSuccess($"TeamViewer found at: {appPath}");
+            return true;
+        }
+
         WriteError("TeamViewer is not installed. Install TeamViewer before running setup.");
         Console.WriteLine("    Download from: https://www.teamviewer.com/en/download/");
         Console.WriteLine("    The watchdog cannot guarantee TeamViewer availability without it.");
         return false;
     }
 
-    private static void CheckBlockers()
+    private static bool CheckBlockers()
     {
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
 
-            // Legal notice blocks auto-login
+            // Legal notice blocks auto-login - this is a hard stop
             var legalNotice = key?.GetValue("LegalNoticeText") as string;
             var legalCaption = key?.GetValue("LegalNoticeCaption") as string;
 
@@ -263,12 +283,13 @@ public static class SetupManager
                 Console.WriteLine("    Auto-login will NOT work until this is removed.");
                 Console.WriteLine("    This is typically set by enterprise Group Policy.");
                 Console.WriteLine("    Registry: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
-                _criticalFailures++;
+                Console.WriteLine();
+                Console.WriteLine("    Setup CANNOT continue with this blocker in place.");
+                Console.WriteLine("    Remove the LegalNotice values and re-run setup.");
+                return false;
             }
-            else
-            {
-                WriteSuccess("No legal notice blocker");
-            }
+
+            WriteSuccess("No legal notice blocker");
 
             // DontDisplayLastUserName can interfere
             var dontDisplay = key?.GetValue("DontDisplayLastUserName");
@@ -282,6 +303,8 @@ public static class SetupManager
             // Key doesn't exist - no blockers
             WriteSuccess("No login policy blockers detected");
         }
+
+        return true;
     }
 
     private static void CheckCredentialGuard()

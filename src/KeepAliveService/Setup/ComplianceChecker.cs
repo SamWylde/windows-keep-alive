@@ -27,6 +27,7 @@ public static class ComplianceChecker
         CheckArso();
         CheckLockScreen();
         CheckPowerSettings();
+        CheckNetworkSettings();
         CheckService();
         CheckTeamViewer();
 
@@ -136,13 +137,15 @@ public static class ComplianceChecker
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
 
             var legalNotice = key?.GetValue("LegalNoticeText") as string;
-            if (!string.IsNullOrWhiteSpace(legalNotice))
+            var legalCaption = key?.GetValue("LegalNoticeCaption") as string;
+
+            if (!string.IsNullOrWhiteSpace(legalNotice) || !string.IsNullOrWhiteSpace(legalCaption))
             {
-                Fail("LegalNoticeText is set - this blocks auto-login (user must click OK)");
+                Fail("LegalNoticeText/LegalNoticeCaption is set - this blocks auto-login (user must click OK)");
             }
             else
             {
-                Pass("No LegalNoticeText blocker");
+                Pass("No LegalNotice blocker");
             }
 
             var dontDisplayLast = key?.GetValue("DontDisplayLastUserName");
@@ -191,6 +194,10 @@ public static class ComplianceChecker
         CheckRegistryDword(Registry.LocalMachine,
             @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
             "DisableLockWorkstation", 1, "Workstation lock disabled");
+
+        CheckRegistryString(Registry.LocalMachine,
+            @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop",
+            "ScreenSaverIsSecure", "0", "Screen saver password disabled (machine policy)");
     }
 
     private static void CheckPowerSettings()
@@ -198,21 +205,34 @@ public static class ComplianceChecker
         Console.WriteLine();
         Console.WriteLine("--- Power Settings ---");
 
-        // Check sleep timeout via powercfg query
         // SUB_SLEEP GUID = 238c9fa8-0aad-41ed-83f4-97be242c8f20
         // STANDBYIDLE GUID = 29f6c1db-86da-48c5-9fdb-f2b67b1f44da
-        CheckPowerCfgValue("Sleep timeout (AC)", "238c9fa8-0aad-41ed-83f4-97be242c8f20", "29f6c1db-86da-48c5-9fdb-f2b67b1f44da", 0);
+        CheckPowerCfgBothAcDc("Sleep timeout", "238c9fa8-0aad-41ed-83f4-97be242c8f20", "29f6c1db-86da-48c5-9fdb-f2b67b1f44da", 0, "Never");
 
-        // Check hibernate - use powercfg /hibernate to see if hiberfile exists
+        // Check hibernate
         CheckHibernateDisabled();
 
-        // Check lid close action
+        // Lid close action
         // SUB_BUTTONS GUID = 4f971e89-eebd-4455-a8de-9e59040e7347
         // LIDACTION GUID = 5ca83367-6e45-459f-a27b-476b1d01c936
         CheckLidCloseAction();
+
+        // Hybrid sleep
+        // HYBRIDSLEEP GUID = 94ac6d29-73ce-41a6-809f-6363ba21b47e
+        CheckPowerCfgBothAcDc("Hybrid sleep", "238c9fa8-0aad-41ed-83f4-97be242c8f20", "94ac6d29-73ce-41a6-809f-6363ba21b47e", 0, "Disabled");
+
+        // Monitor timeout
+        // SUB_VIDEO GUID = 7516b95f-f776-4464-8c53-06167f40cc99
+        // VIDEOIDLE GUID = 3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e
+        CheckPowerCfgBothAcDc("Monitor timeout", "7516b95f-f776-4464-8c53-06167f40cc99", "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e", 0, "Never");
+
+        // Console lock on wake (require sign-in after sleep)
+        // SUB_NONE GUID = fea3413e-7e05-4911-9a71-700331f1c294
+        // CONSOLELOCK GUID = 0e796bdb-100d-47d6-a2d5-f7d2daa51f51
+        CheckPowerCfgBothAcDc("Console lock on wake", "fea3413e-7e05-4911-9a71-700331f1c294", "0e796bdb-100d-47d6-a2d5-f7d2daa51f51", 0, "Disabled");
     }
 
-    private static void CheckPowerCfgValue(string name, string subgroupGuid, string settingGuid, int expectedValue)
+    private static void CheckPowerCfgBothAcDc(string name, string subgroupGuid, string settingGuid, int expectedValue, string friendlyValue)
     {
         try
         {
@@ -229,20 +249,32 @@ public static class ComplianceChecker
             var output = process?.StandardOutput.ReadToEnd() ?? "";
             process?.WaitForExit(10_000);
 
-            // Parse "Current AC Power Setting Index: 0x00000000"
             var expectedHex = $"0x{expectedValue:x8}";
-            var acLine = output.Split('\n')
-                .FirstOrDefault(l => l.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase));
+            var lines = output.Split('\n');
+            var acOk = false;
+            var dcOk = false;
 
-            if (acLine != null && acLine.Contains(expectedHex, StringComparison.OrdinalIgnoreCase))
+            foreach (var line in lines)
             {
-                Pass($"{name} = {expectedValue} (Never)");
+                var trimmed = line.Trim();
+                if (trimmed.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase))
+                {
+                    acOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
+                }
+                else if (trimmed.Contains("Current DC Power Setting Index", StringComparison.OrdinalIgnoreCase))
+                {
+                    dcOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
+                }
             }
+
+            if (acOk && dcOk)
+                Pass($"{name}: {friendlyValue} (AC and DC)");
+            else if (acOk)
+                Fail($"{name}: {friendlyValue} on AC, but NOT on DC");
+            else if (dcOk)
+                Fail($"{name}: {friendlyValue} on DC, but NOT on AC");
             else
-            {
-                var actual = acLine?.Trim().Split(':').LastOrDefault()?.Trim() ?? "(could not read)";
-                Fail($"{name} = {actual} (expected {expectedHex})");
-            }
+                Fail($"{name}: not set to {friendlyValue}");
         }
         catch
         {
@@ -359,6 +391,22 @@ public static class ComplianceChecker
         {
             Warn("Could not check lid close action");
         }
+    }
+
+    private static void CheckNetworkSettings()
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Network / WiFi ---");
+
+        // WiFi power saving mode
+        // GUID 19cbb8fa-... = Wireless Adapter Settings
+        // GUID 12bbebe6-... = Power Saving Mode (0 = Maximum Performance)
+        CheckPowerCfgBothAcDc("WiFi power saving", "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1", "12bbebe6-58d6-4636-95bb-3217ef867c1a", 0, "Maximum Performance");
+
+        // USB selective suspend
+        // GUID 2a737441-... = USB Settings
+        // GUID 48e6b7a6-... = USB Selective Suspend Setting (0 = Disabled)
+        CheckPowerCfgBothAcDc("USB selective suspend", "2a737441-1930-4402-8d77-b2bebba308a3", "48e6b7a6-50f5-4782-a5d4-53bb8f07e226", 0, "Disabled");
     }
 
     private static void CheckService()
