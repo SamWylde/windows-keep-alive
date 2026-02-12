@@ -77,8 +77,11 @@ public static class NetworkConfigurator
                                  driverDesc.Contains("WLAN", StringComparison.OrdinalIgnoreCase) ||
                                  componentId.Contains("wireless", StringComparison.OrdinalIgnoreCase) ||
                                  componentId.Contains("wlan", StringComparison.OrdinalIgnoreCase);
+                var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase);
 
-                if (!isWireless) continue;
+                if (!isWireless || isVirtual) continue;
 
                 adaptersFound++;
 

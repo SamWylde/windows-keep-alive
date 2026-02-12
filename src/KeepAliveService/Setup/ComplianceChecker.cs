@@ -98,9 +98,24 @@ public static class ComplianceChecker
             "No auto-reboot with logged-on users");
 
         CheckRegistryDword(Registry.LocalMachine,
+            @"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU",
+            "AUOptions", 4,
+            "Auto-download, schedule install");
+
+        CheckRegistryDword(Registry.LocalMachine,
             @"SOFTWARE\Microsoft\WindowsUpdate\UX\Settings",
             "IsActiveHoursEnabled", 1,
             "Active Hours enabled");
+
+        CheckRegistryDword(Registry.LocalMachine,
+            @"SOFTWARE\Microsoft\WindowsUpdate\UX\Settings",
+            "ActiveHoursStart", 0,
+            "Active Hours start");
+
+        CheckRegistryDword(Registry.LocalMachine,
+            @"SOFTWARE\Microsoft\WindowsUpdate\UX\Settings",
+            "ActiveHoursEnd", 18,
+            "Active Hours end");
     }
 
     private static void CheckAutoLogin()
@@ -164,6 +179,10 @@ public static class ComplianceChecker
                 if (intValue == 0)
                 {
                     Pass("Windows Hello passwordless requirement disabled");
+                }
+                else if (_isWindows11)
+                {
+                    Fail($"Windows Hello passwordless requirement = {intValue} (expected 0; auto-login will not work on Windows 11)");
                 }
                 else
                 {
@@ -261,6 +280,18 @@ public static class ComplianceChecker
         CheckRegistryString(Registry.LocalMachine,
             @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop",
             "ScreenSaverIsSecure", "0", "Screen saver password disabled (machine policy)");
+
+        CheckRegistryString(Registry.LocalMachine,
+            @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop",
+            "ScreenSaveActive", "0", "Screen saver disabled (machine policy)");
+
+        CheckRegistryString(Registry.LocalMachine,
+            @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop",
+            "ScreenSaveTimeOut", "0", "Screen saver timeout disabled (machine policy)");
+
+        CheckRegistryString(Registry.LocalMachine,
+            @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop",
+            "SCRNSAVE.EXE", string.Empty, "Screen saver executable cleared (machine policy)");
     }
 
     private static void CheckPowerSettings()
@@ -470,6 +501,76 @@ public static class ComplianceChecker
         // GUID 2a737441-... = USB Settings
         // GUID 48e6b7a6-... = USB Selective Suspend Setting (0 = Disabled)
         CheckPowerCfgBothAcDc("USB selective suspend", "2a737441-1930-4402-8d77-b2bebba308a3", "48e6b7a6-50f5-4782-a5d4-53bb8f07e226", 0, "Disabled");
+
+        CheckWifiAdapterPowerManagement();
+    }
+
+    private static void CheckWifiAdapterPowerManagement()
+    {
+        try
+        {
+            var adaptersFound = 0;
+            using var networkKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}");
+
+            if (networkKey == null)
+            {
+                Warn("Could not open network adapter registry key for PnPCapabilities check.");
+                return;
+            }
+
+            foreach (var subKeyName in networkKey.GetSubKeyNames())
+            {
+                if (!int.TryParse(subKeyName, out _))
+                {
+                    continue;
+                }
+
+                using var adapterKey = networkKey.OpenSubKey(subKeyName);
+                if (adapterKey == null)
+                {
+                    continue;
+                }
+
+                var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
+                var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
+
+                var isWireless = driverDesc.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
+                                 driverDesc.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                                 driverDesc.Contains("WLAN", StringComparison.OrdinalIgnoreCase) ||
+                                 componentId.Contains("wireless", StringComparison.OrdinalIgnoreCase) ||
+                                 componentId.Contains("wlan", StringComparison.OrdinalIgnoreCase);
+                var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase);
+
+                if (!isWireless || isVirtual)
+                {
+                    continue;
+                }
+
+                adaptersFound++;
+                var adapterName = string.IsNullOrWhiteSpace(driverDesc) ? subKeyName : driverDesc;
+                var pnpCapabilities = adapterKey.GetValue("PnPCapabilities");
+                if (pnpCapabilities is int pnpValue && pnpValue == 24)
+                {
+                    Pass($"WiFi adapter power management disabled: {adapterName}");
+                }
+                else
+                {
+                    Fail($"WiFi adapter power management not disabled: {adapterName} (PnPCapabilities={pnpCapabilities ?? "(not set)"}, expected 24)");
+                }
+            }
+
+            if (adaptersFound == 0)
+            {
+                Warn("No WiFi adapters found for PnPCapabilities check (Ethernet-only system?).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Warn($"Could not check WiFi adapter power management: {ex.Message}");
+        }
     }
 
     private static void CheckService()

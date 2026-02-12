@@ -20,7 +20,8 @@ It is designed to keep the machine online, keep auto-login configured, and keep 
 - TeamViewer installed
 
 Home/Core note: some settings in `HKLM\SOFTWARE\Policies\...` can be present in the registry but not enforced identically to Pro/Enterprise policy behavior. The app now warns when this applies.
-The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.1.8`).
+
+The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.1.9`).
 
 ## Quick Start (GUI, recommended)
 

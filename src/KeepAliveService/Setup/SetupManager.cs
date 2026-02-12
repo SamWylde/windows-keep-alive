@@ -52,7 +52,7 @@ public static class SetupManager
             _criticalFailures++;
 
         // Step 4: Network / WiFi
-        // Non-critical: WiFi config failure shouldn't block setup
+        // Best effort: any missed required values are surfaced by the post-setup compliance check.
         TryRun("Network configuration", NetworkConfigurator.Configure);
 
         // Step 5: Install self as service
