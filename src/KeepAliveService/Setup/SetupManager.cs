@@ -9,6 +9,7 @@ namespace KeepAliveService.Setup;
 
 public static class SetupManager
 {
+    private const string SystemPolicyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
     private static int _criticalFailures;
 
     public static int RunSetup()
@@ -149,13 +150,13 @@ public static class SetupManager
             return false;
         }
 
-        // Check for auto-login blockers (hard stop if LegalNotice is set)
+        // Check for auto-login blockers and auto-fix if possible.
         if (!CheckBlockers())
         {
             return false;
         }
 
-        // Check for Credential Guard (warning only - continues)
+        // Check for Credential Guard and auto-disable via registry when possible.
         CheckCredentialGuard();
 
         return true;
@@ -304,33 +305,70 @@ public static class SetupManager
     {
         try
         {
-            using var key = Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System");
+            using var key = Registry.LocalMachine.OpenSubKey(SystemPolicyPath);
 
-            // Legal notice blocks auto-login - this is a hard stop
+            // Legal notice blocks auto-login. Auto-clear it and only fail if we cannot.
             var legalNotice = key?.GetValue("LegalNoticeText") as string;
             var legalCaption = key?.GetValue("LegalNoticeCaption") as string;
 
             if (!string.IsNullOrWhiteSpace(legalNotice) || !string.IsNullOrWhiteSpace(legalCaption))
             {
-                WriteError("BLOCKER: LegalNoticeText/LegalNoticeCaption is set.");
-                Console.WriteLine("    This forces a dialog box at login that requires manual acknowledgment.");
-                Console.WriteLine("    Auto-login will NOT work until this is removed.");
-                Console.WriteLine("    This is typically set by enterprise Group Policy.");
-                Console.WriteLine("    Registry: HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
-                Console.WriteLine();
-                Console.WriteLine("    Setup CANNOT continue with this blocker in place.");
-                Console.WriteLine("    Remove the LegalNotice values and re-run setup.");
-                return false;
-            }
+                WriteWarning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
+                try
+                {
+                    using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
+                    if (writableKey == null)
+                    {
+                        WriteError("Could not open policy key for LegalNotice auto-fix.");
+                        return false;
+                    }
 
-            WriteSuccess("No legal notice blocker");
+                    writableKey.SetValue("LegalNoticeText", string.Empty, RegistryValueKind.String);
+                    writableKey.SetValue("LegalNoticeCaption", string.Empty, RegistryValueKind.String);
+
+                    using var verifyKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath);
+                    var legalNoticeAfter = verifyKey?.GetValue("LegalNoticeText") as string;
+                    var legalCaptionAfter = verifyKey?.GetValue("LegalNoticeCaption") as string;
+                    if (!string.IsNullOrWhiteSpace(legalNoticeAfter) || !string.IsNullOrWhiteSpace(legalCaptionAfter))
+                    {
+                        WriteError("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
+                        return false;
+                    }
+
+                    WriteSuccess("LegalNoticeText/LegalNoticeCaption -> Cleared");
+                }
+                catch (Exception ex)
+                {
+                    WriteError($"Could not remove LegalNotice blocker: {ex.Message}");
+                    return false;
+                }
+            }
+            else
+            {
+                WriteSuccess("No legal notice blocker");
+            }
 
             // DontDisplayLastUserName can interfere
             var dontDisplay = key?.GetValue("DontDisplayLastUserName");
             if (dontDisplay is int d && d == 1)
             {
-                WriteWarning("DontDisplayLastUserName = 1 (may interfere with auto-login, typically set by enterprise policy)");
+                try
+                {
+                    using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
+                    if (writableKey == null)
+                    {
+                        WriteWarning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
+                    }
+                    else
+                    {
+                        writableKey.SetValue("DontDisplayLastUserName", 0, RegistryValueKind.DWord);
+                        WriteSuccess("DontDisplayLastUserName -> Set to 0 (was 1)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteWarning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
+                }
             }
         }
         catch
@@ -359,23 +397,30 @@ public static class SetupManager
 
                 if (lsaCfg is int lsaVal && lsaVal != 0)
                 {
-                    WriteWarning("Credential Guard appears to be enabled.");
-                    Console.WriteLine("    Sysinternals Autologon may fail to store credentials.");
-                    Console.WriteLine("    If auto-login doesn't work after setup, you may need to disable Credential Guard:");
-                    var isHomeOrCore = WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _) &&
-                                       info?.IsHomeOrCore == true;
-                    if (isHomeOrCore)
+                    WriteWarning("Credential Guard appears to be enabled. Disabling via registry...");
+                    if (TryDisableCredentialGuard())
                     {
-                        Console.WriteLine("    1. Home/Core note: gpedit.msc is typically unavailable.");
-                        Console.WriteLine("    2. Use Microsoft docs for disabling VBS/Credential Guard via registry/boot policy.");
-                        Console.WriteLine("    3. Reboot after applying those changes.");
+                        WriteSuccess("Credential Guard -> Disabled (registry). A reboot is required.");
                     }
                     else
                     {
-                        Console.WriteLine("    1. Run gpedit.msc");
-                        Console.WriteLine("    2. Computer Config > Admin Templates > System > Device Guard");
-                        Console.WriteLine("    3. Set 'Turn On Virtualization Based Security' to Disabled");
-                        Console.WriteLine("    4. Reboot");
+                        Console.WriteLine("    Sysinternals Autologon may fail to store credentials.");
+                        Console.WriteLine("    If auto-login doesn't work after setup, you may need to disable Credential Guard manually.");
+                        var isHomeOrCore = WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _) &&
+                                           info?.IsHomeOrCore == true;
+                        if (isHomeOrCore)
+                        {
+                            Console.WriteLine("    1. Home/Core note: gpedit.msc is typically unavailable.");
+                            Console.WriteLine("    2. Use Microsoft docs for disabling VBS/Credential Guard via registry/boot policy.");
+                            Console.WriteLine("    3. Reboot after applying those changes.");
+                        }
+                        else
+                        {
+                            Console.WriteLine("    1. Run gpedit.msc");
+                            Console.WriteLine("    2. Computer Config > Admin Templates > System > Device Guard");
+                            Console.WriteLine("    3. Set 'Turn On Virtualization Based Security' to Disabled");
+                            Console.WriteLine("    4. Reboot");
+                        }
                     }
                 }
                 else
@@ -391,6 +436,32 @@ public static class SetupManager
         catch
         {
             WriteSuccess("Credential Guard: Not detected");
+        }
+    }
+
+    private static bool TryDisableCredentialGuard()
+    {
+        try
+        {
+            using var dgKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\DeviceGuard", writable: true);
+            using var lsaKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Lsa", writable: true);
+
+            if (dgKey == null || lsaKey == null)
+            {
+                WriteWarning("Could not auto-disable Credential Guard: required registry paths are not writable.");
+                return false;
+            }
+
+            dgKey.SetValue("EnableVirtualizationBasedSecurity", 0, RegistryValueKind.DWord);
+            lsaKey.SetValue("LsaCfgFlags", 0, RegistryValueKind.DWord);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            WriteWarning($"Could not auto-disable Credential Guard: {ex.Message}");
+            return false;
         }
     }
 

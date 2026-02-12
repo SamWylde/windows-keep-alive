@@ -243,7 +243,7 @@ public static class ComplianceChecker
             var dontDisplayLast = key?.GetValue("DontDisplayLastUserName");
             if (dontDisplayLast is int dontDisplay && dontDisplay == 1)
             {
-                Warn("DontDisplayLastUserName = 1 - may interfere with auto-login");
+                Fail("DontDisplayLastUserName = 1 - blocks reliable auto-login and should be 0");
             }
         }
         catch
