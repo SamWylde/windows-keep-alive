@@ -11,6 +11,7 @@ public static class AutoLogonConfigurator
     private const string PasswordlessPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device";
     private const string PersonalizationPath = @"SOFTWARE\Policies\Microsoft\Windows\Personalization";
     private const string SystemPolicyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+    private const string DesktopPolicyPath = @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop";
 
     private static int _failures;
 
@@ -106,6 +107,10 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteWarning($"Disable Windows Hello requirement - {ex.Message} (continuing)");
+            if (WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _) && info?.IsWindows11 == true)
+            {
+                _failures++;
+            }
         }
     }
 
@@ -159,9 +164,18 @@ public static class AutoLogonConfigurator
         // not just the admin account running setup.
         try
         {
-            using var key = Registry.LocalMachine.CreateSubKey(
-                @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop", writable: true);
-            key?.SetValue("ScreenSaverIsSecure", "0", RegistryValueKind.String);
+            using var key = Registry.LocalMachine.CreateSubKey(DesktopPolicyPath, writable: true);
+            if (key == null)
+            {
+                WriteWarning("Disable screen saver policy - Could not create/open registry key");
+                return;
+            }
+
+            key.SetValue("ScreenSaverIsSecure", "0", RegistryValueKind.String);
+            key.SetValue("ScreenSaveActive", "0", RegistryValueKind.String);
+            key.SetValue("ScreenSaveTimeOut", "0", RegistryValueKind.String);
+            key.SetValue("SCRNSAVE.EXE", string.Empty, RegistryValueKind.String);
+            WriteSuccess("Screen saver -> Disabled (machine policy)");
             WriteSuccess("Screen saver password -> Disabled (machine policy)");
         }
         catch (Exception ex)
