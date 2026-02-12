@@ -33,9 +33,6 @@ public static class NetworkConfigurator
             "/setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0",
             "USB selective suspend (DC) -> Disabled");
 
-        // Apply changes
-        RunPowerCfg("/setactive SCHEME_CURRENT", "Applied network power settings");
-
         // Disable adapter power management via registry (the real fix)
         DisableAdapterPowerManagement();
 
@@ -73,9 +70,14 @@ public static class NetworkConfigurator
 
                 var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
                                 driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
                                 componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
                                 componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase);
+                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
 
                 if (isVirtual) continue;
 

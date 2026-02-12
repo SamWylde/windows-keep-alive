@@ -39,6 +39,7 @@ public sealed class MainForm : Form
     private readonly Label _lastCheckLabel;
     private readonly Label _currentVersionLabel;
     private readonly Label _latestVersionLabel;
+    private readonly Label _lastUpdateCheckLabel;
     private readonly RichTextBox _releaseNotesBox;
     private readonly Button _checkUpdatesButton;
     private readonly Button _updateNowButton;
@@ -352,9 +353,10 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(16),
         };
+        updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -364,6 +366,7 @@ public sealed class MainForm : Form
 
         _currentVersionLabel = new Label { AutoSize = true };
         _latestVersionLabel = new Label { AutoSize = true, Text = "Latest: unknown" };
+        _lastUpdateCheckLabel = new Label { AutoSize = true, Text = FormatLastUpdateCheckLabel(_settings.LastUpdateCheckUtc) };
         var releaseNotesLabel = new Label { AutoSize = true, Text = "Release notes:" };
         _releaseNotesBox = new RichTextBox
         {
@@ -392,9 +395,10 @@ public sealed class MainForm : Form
 
         updatesLayout.Controls.Add(_currentVersionLabel, 0, 0);
         updatesLayout.Controls.Add(_latestVersionLabel, 0, 1);
-        updatesLayout.Controls.Add(releaseNotesLabel, 0, 2);
-        updatesLayout.Controls.Add(_releaseNotesBox, 0, 3);
-        updatesLayout.Controls.Add(updateButtons, 0, 4);
+        updatesLayout.Controls.Add(_lastUpdateCheckLabel, 0, 2);
+        updatesLayout.Controls.Add(releaseNotesLabel, 0, 3);
+        updatesLayout.Controls.Add(_releaseNotesBox, 0, 4);
+        updatesLayout.Controls.Add(updateButtons, 0, 5);
 
         // Logs tab
         _logViewerBox = new RichTextBox
@@ -467,6 +471,7 @@ public sealed class MainForm : Form
         _logTimer.Start();
 
         // Always perform a real update check on app startup.
+        Console.WriteLine("[INFO] Checking for updates...");
         _isStartupUpdateCheck = true;
         await CheckForUpdatesAsync(force: true);
         _isStartupUpdateCheck = false;
@@ -796,6 +801,7 @@ public sealed class MainForm : Form
             _updateStatusStrip.Text = "Update: checking...";
             var result = await _updateChecker.CheckForUpdateAsync(force);
             _lastUpdateResult = result;
+            _lastUpdateCheckLabel.Text = FormatLastUpdateCheckLabel(_settings.LastUpdateCheckUtc);
 
             _currentVersionLabel.Text = $"Current: v{FormatVersion(result.CurrentVersion)}";
 
@@ -1450,6 +1456,13 @@ public sealed class MainForm : Form
         var boundedHours = hours <= 0 ? 24 : hours;
         var ms = TimeSpan.FromHours(boundedHours).TotalMilliseconds;
         return ms > int.MaxValue ? int.MaxValue : (int)ms;
+    }
+
+    private static string FormatLastUpdateCheckLabel(DateTime? utc)
+    {
+        return utc.HasValue
+            ? $"Last checked: {utc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+            : "Last checked: never";
     }
 
     private static string FormatVersion(Version? version)

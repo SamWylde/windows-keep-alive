@@ -39,9 +39,6 @@ public static class PowerConfigurator
         RunPowerCfg("/setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (AC) -> Disabled");
         RunPowerCfg("/setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", "Sign-in after sleep (DC) -> Disabled");
 
-        // Apply all changes
-        RunPowerCfg("/setactive SCHEME_CURRENT", "Applied power scheme changes");
-
         return _failures == 0;
     }
 
