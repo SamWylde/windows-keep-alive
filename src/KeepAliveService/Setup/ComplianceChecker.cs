@@ -151,6 +151,21 @@ public static class ComplianceChecker
         CheckRegistryString(Registry.LocalMachine, winlogonPath,
             "ForceAutoLogon", "1", "ForceAutoLogon");
 
+        // Verify AutoLogonCount is not set (would limit auto-login attempts).
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(winlogonPath);
+            var autoLogonCount = key?.GetValue("AutoLogonCount");
+            if (autoLogonCount != null)
+                Fail($"AutoLogonCount = {autoLogonCount} (should not exist - will limit auto-login attempts)");
+            else
+                Pass("AutoLogonCount not set (unlimited auto-logins)");
+        }
+        catch
+        {
+            Warn("Could not verify AutoLogonCount");
+        }
+
         // Check Windows Hello passwordless requirement in a capability-aware way.
         CheckPasswordlessRequirement();
 
@@ -490,7 +505,7 @@ public static class ComplianceChecker
     private static void CheckNetworkSettings()
     {
         Console.WriteLine();
-        Console.WriteLine("--- Network / WiFi ---");
+        Console.WriteLine("--- Network ---");
 
         // WiFi power saving mode
         // GUID 19cbb8fa-... = Wireless Adapter Settings
@@ -502,10 +517,10 @@ public static class ComplianceChecker
         // GUID 48e6b7a6-... = USB Selective Suspend Setting (0 = Disabled)
         CheckPowerCfgBothAcDc("USB selective suspend", "2a737441-1930-4402-8d77-b2bebba308a3", "48e6b7a6-50f5-4782-a5d4-53bb8f07e226", 0, "Disabled");
 
-        CheckWifiAdapterPowerManagement();
+        CheckNetworkAdapterPowerManagement();
     }
 
-    private static void CheckWifiAdapterPowerManagement()
+    private static void CheckNetworkAdapterPowerManagement()
     {
         try
         {
@@ -535,16 +550,13 @@ public static class ComplianceChecker
                 var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
                 var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
 
-                var isWireless = driverDesc.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
-                                 driverDesc.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
-                                 driverDesc.Contains("WLAN", StringComparison.OrdinalIgnoreCase) ||
-                                 componentId.Contains("wireless", StringComparison.OrdinalIgnoreCase) ||
-                                 componentId.Contains("wlan", StringComparison.OrdinalIgnoreCase);
                 var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
                                 driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase);
+                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase);
 
-                if (!isWireless || isVirtual)
+                if (isVirtual)
                 {
                     continue;
                 }
@@ -554,22 +566,22 @@ public static class ComplianceChecker
                 var pnpCapabilities = adapterKey.GetValue("PnPCapabilities");
                 if (pnpCapabilities is int pnpValue && pnpValue == 24)
                 {
-                    Pass($"WiFi adapter power management disabled: {adapterName}");
+                    Pass($"Network adapter power management disabled: {adapterName}");
                 }
                 else
                 {
-                    Fail($"WiFi adapter power management not disabled: {adapterName} (PnPCapabilities={pnpCapabilities ?? "(not set)"}, expected 24)");
+                    Fail($"Network adapter power management not disabled: {adapterName} (PnPCapabilities={pnpCapabilities ?? "(not set)"}, expected 24)");
                 }
             }
 
             if (adaptersFound == 0)
             {
-                Warn("No WiFi adapters found for PnPCapabilities check (Ethernet-only system?).");
+                Warn("No eligible physical network adapters found for PnPCapabilities check.");
             }
         }
         catch (Exception ex)
         {
-            Warn($"Could not check WiFi adapter power management: {ex.Message}");
+            Warn($"Could not check network adapter power management: {ex.Message}");
         }
     }
 

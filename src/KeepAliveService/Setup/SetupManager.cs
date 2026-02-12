@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Principal;
 using System.ServiceProcess;
 using KeepAliveService.UI;
+using KeepAliveService.Update;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -69,6 +70,11 @@ public static class SetupManager
             _criticalFailures++;
         }
 
+        if (_criticalFailures == 0)
+        {
+            TryPersistSetupCompletedTimestamp();
+        }
+
         // Summary - conditional on success/failure
         PrintSummary();
 
@@ -85,6 +91,20 @@ public static class SetupManager
         {
             WriteError($"{stepName} failed: {ex.Message}");
             return false;
+        }
+    }
+
+    private static void TryPersistSetupCompletedTimestamp()
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            settings.SetupCompletedUtc = DateTime.UtcNow;
+            settings.Save();
+        }
+        catch
+        {
+            // Best effort only.
         }
     }
 

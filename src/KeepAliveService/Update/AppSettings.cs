@@ -24,6 +24,8 @@ public sealed class AppSettings
 
     public int UpdateCheckIntervalHours { get; set; } = 24;
 
+    public DateTime? SetupCompletedUtc { get; set; }
+
     public string? SavedUsername { get; set; }
 
     public string? SavedAccountType { get; set; }

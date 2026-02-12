@@ -11,11 +11,13 @@ namespace KeepAliveService.UI;
 public sealed class MainForm : Form
 {
     private const int MaxLogChars = 250_000;
+    private const int StatusTabAutoCheckDebounceSeconds = 30;
 
     private readonly AppSettings _settings;
     private readonly GitHubUpdateChecker _updateChecker;
     private readonly TextWriter _originalConsoleOut;
     private readonly TextWriter _originalConsoleError;
+    private readonly ToolTip _toolTip;
 
     private readonly RichTextBox _setupOutputBox;
     private readonly RichTextBox _logViewerBox;
@@ -23,6 +25,7 @@ public sealed class MainForm : Form
     private readonly ComboBox _accountTypeComboBox;
     private readonly TextBox _domainTextBox;
     private readonly TextBox _passwordTextBox;
+    private readonly CheckBox _showPasswordCheckBox;
     private readonly Button _runSetupButton;
     private readonly Button _testCredentialsButton;
     private readonly Button _updatePasswordButton;
@@ -52,12 +55,14 @@ public sealed class MainForm : Form
     private bool _isOperationRunning;
     private bool _isUpdateCheckRunning;
     private bool _suppressCredentialPersistence;
-    private bool _statusTabAutoCheckTriggered;
     private bool _isStartupUpdateCheck;
     private bool _startupUpdatePromptShown;
     private bool _allowClose;
     private bool _trayHintShown;
+    private bool _serviceInstalled;
+    private ServiceControllerStatus? _currentServiceStatus;
     private long _lastLogLength = -1;
+    private DateTime _lastStatusTabCheckUtc = DateTime.MinValue;
     private UpdateCheckResult? _lastUpdateResult;
 
     public MainForm()
@@ -66,6 +71,13 @@ public sealed class MainForm : Form
         _updateChecker = new GitHubUpdateChecker(_settings);
         _originalConsoleOut = Console.Out;
         _originalConsoleError = Console.Error;
+        _toolTip = new ToolTip
+        {
+            AutoPopDelay = 10000,
+            InitialDelay = 350,
+            ReshowDelay = 200,
+            ShowAlways = true,
+        };
 
         Text = $"Windows Keep Alive v{FormatVersion(Assembly.GetExecutingAssembly().GetName().Version)}";
         StartPosition = FormStartPosition.CenterScreen;
@@ -89,10 +101,9 @@ public sealed class MainForm : Form
         tabControl.TabPages.Add(logsTab);
         tabControl.Selected += async (_, _) =>
         {
-            if (tabControl.SelectedTab == statusTab && !_statusTabAutoCheckTriggered)
+            if (tabControl.SelectedTab == statusTab)
             {
-                _statusTabAutoCheckTriggered = true;
-                await RunComplianceCheckAsync();
+                await RunStatusTabAutoCheckAsync();
             }
         };
         Controls.Add(tabControl);
@@ -202,7 +213,19 @@ public sealed class MainForm : Form
         };
         _passwordTextBox.TextChanged += (_, _) => QueueCredentialPersistence();
         quickSetupLayout.Controls.Add(_passwordTextBox, 1, 3);
-        quickSetupLayout.SetColumnSpan(_passwordTextBox, 3);
+        quickSetupLayout.SetColumnSpan(_passwordTextBox, 2);
+
+        _showPasswordCheckBox = new CheckBox
+        {
+            Text = "Show",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+        };
+        _showPasswordCheckBox.CheckedChanged += (_, _) =>
+        {
+            _passwordTextBox.PasswordChar = _showPasswordCheckBox.Checked ? '\0' : '*';
+        };
+        quickSetupLayout.Controls.Add(_showPasswordCheckBox, 3, 3);
 
         _usernameTextBox.TextChanged += (_, _) => QueueCredentialPersistence();
 
@@ -242,6 +265,7 @@ public sealed class MainForm : Form
         {
             Text = "Uninstall",
             AutoSize = true,
+            ForeColor = Color.Firebrick,
         };
         _uninstallButton.Click += async (_, _) => await UninstallAsync();
         setupButtonFlow.Controls.Add(_uninstallButton);
@@ -346,7 +370,9 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ReadOnly = true,
             Font = new Font("Consolas", 10),
-            BackColor = Color.FromArgb(245, 245, 245),
+            BackColor = Color.FromArgb(28, 31, 36),
+            ForeColor = Color.Gainsboro,
+            BorderStyle = BorderStyle.None,
         };
 
         var updateButtons = new FlowLayoutPanel
@@ -376,7 +402,9 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ReadOnly = true,
             Font = new Font("Consolas", 10),
-            BackColor = Color.FromArgb(245, 245, 245),
+            BackColor = Color.FromArgb(28, 31, 36),
+            ForeColor = Color.Gainsboro,
+            BorderStyle = BorderStyle.None,
             WordWrap = false,
         };
         logsTab.Controls.Add(_logViewerBox);
@@ -410,6 +438,8 @@ public sealed class MainForm : Form
         _versionStatus.Text = $"v{FormatVersion(Assembly.GetExecutingAssembly().GetName().Version)}";
         _adminStatus.Text = $"Admin: {(IsRunningAsAdmin() ? "Yes" : "No")}";
 
+        ConfigureToolTips();
+
         Shown += async (_, _) => await OnShownAsync();
         FormClosing += OnFormClosing;
         FormClosed += (_, _) => RestoreConsoleOutput();
@@ -427,6 +457,12 @@ public sealed class MainForm : Form
         Console.WriteLine($"[INFO] Install path: {InstallManager.CanonicalExePath}");
 
         RefreshServiceStatus();
+        if (_settings.SetupCompletedUtc == null)
+        {
+            _complianceLabel.Text = "Setup has not been completed. Go to the Setup tab to configure this machine.";
+            _complianceLabel.ForeColor = Color.DarkGoldenrod;
+        }
+
         RefreshLogViewer();
         _logTimer.Start();
 
@@ -452,6 +488,16 @@ public sealed class MainForm : Form
                 var exitCode = await Task.Run(() => SetupManager.RunSetup(credentials!));
                 if (exitCode == 0)
                 {
+                    _settings.SetupCompletedUtc = DateTime.UtcNow;
+                    try
+                    {
+                        _settings.Save();
+                    }
+                    catch
+                    {
+                        // Best effort only.
+                    }
+
                     Console.WriteLine("[OK] Setup completed successfully.");
                 }
                 else
@@ -687,6 +733,25 @@ public sealed class MainForm : Form
             });
     }
 
+    private async Task RunStatusTabAutoCheckAsync()
+    {
+        if (_settings.SetupCompletedUtc == null)
+        {
+            _complianceLabel.Text = "Setup has not been completed. Go to the Setup tab to configure this machine.";
+            _complianceLabel.ForeColor = Color.DarkGoldenrod;
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        if (now - _lastStatusTabCheckUtc < TimeSpan.FromSeconds(StatusTabAutoCheckDebounceSeconds))
+        {
+            return;
+        }
+
+        _lastStatusTabCheckUtc = now;
+        await RunComplianceCheckAsync();
+    }
+
     private async Task RunComplianceCheckAsync()
     {
         await RunOperationAsync(
@@ -865,10 +930,10 @@ public sealed class MainForm : Form
         }
         finally
         {
+            SetControlsEnabled(true);
             RefreshServiceStatus();
             RefreshLogViewer();
             _updateStatusStrip.Text = "Update: idle";
-            SetControlsEnabled(true);
             _isOperationRunning = false;
         }
     }
@@ -1017,19 +1082,27 @@ public sealed class MainForm : Form
             using var service = new ServiceController("KeepAliveService");
             var status = service.Status;
             var startMode = service.StartType;
+            _serviceInstalled = true;
+            _currentServiceStatus = status;
             _serviceStatusLabel.Text = $"Service: {status} ({startMode})";
             _serviceStatusStrip.Text = $"Service: {status}";
         }
         catch (InvalidOperationException)
         {
+            _serviceInstalled = false;
+            _currentServiceStatus = null;
             _serviceStatusLabel.Text = "Service: Not installed";
             _serviceStatusStrip.Text = "Service: Not installed";
         }
         catch (Exception ex)
         {
+            _serviceInstalled = false;
+            _currentServiceStatus = null;
             _serviceStatusLabel.Text = $"Service: Error ({ex.Message})";
             _serviceStatusStrip.Text = "Service: Error";
         }
+
+        ApplyServiceButtonState();
     }
 
     private void RefreshLogViewer()
@@ -1087,12 +1160,20 @@ public sealed class MainForm : Form
             var warnings = int.Parse(match.Groups[3].Value);
             var total = passed + failed;
             _complianceLabel.Text = $"Compliance: {passed}/{total} passed ({warnings} warnings)";
+            _complianceLabel.ForeColor = failed > 0
+                ? Color.Firebrick
+                : warnings > 0
+                    ? Color.DarkGoldenrod
+                    : Color.ForestGreen;
             return;
         }
 
         _complianceLabel.Text = exitCode == 0
             ? "Compliance: Passed"
             : "Compliance: Failed";
+        _complianceLabel.ForeColor = exitCode == 0
+            ? Color.ForestGreen
+            : Color.Firebrick;
     }
 
     private bool TryReadCredentials(out CredentialInfo? credentials, out string error)
@@ -1154,6 +1235,25 @@ public sealed class MainForm : Form
                 _domainTextBox.Enabled = true;
                 break;
         }
+    }
+
+    private void ConfigureToolTips()
+    {
+        _toolTip.SetToolTip(_runSetupButton, "Configures auto-login, power settings, Windows Update policy, and installs the KeepAlive service.");
+        _toolTip.SetToolTip(_testCredentialsButton, "Validates your credentials without making any changes.");
+        _toolTip.SetToolTip(_updatePasswordButton, "Changes only the auto-login password (leaves all other settings intact).");
+        _toolTip.SetToolTip(_uninstallButton, "Stops and removes the KeepAlive service (does not revert Windows settings).");
+        _toolTip.SetToolTip(_runCheckButton, "Verifies all settings are correctly applied.");
+        _toolTip.SetToolTip(_startServiceButton, "Start the KeepAlive Windows service.");
+        _toolTip.SetToolTip(_stopServiceButton, "Stop the KeepAlive Windows service.");
+        _toolTip.SetToolTip(_restartServiceButton, "Restart the KeepAlive Windows service.");
+        _toolTip.SetToolTip(_checkUpdatesButton, "Check GitHub for a newer version.");
+        _toolTip.SetToolTip(_updateNowButton, "Download and install the latest version.");
+        _toolTip.SetToolTip(_usernameTextBox, "Windows sign-in username (for Microsoft accounts, use your email).");
+        _toolTip.SetToolTip(_passwordTextBox, "Windows account password (not PIN).");
+        _toolTip.SetToolTip(_showPasswordCheckBox, "Show or hide the password text.");
+        _toolTip.SetToolTip(_domainTextBox, "Domain or machine name used for sign-in.");
+        _toolTip.SetToolTip(_accountTypeComboBox, "Select how you sign into Windows.");
     }
 
     private void CopyOutputToClipboard()
@@ -1280,11 +1380,56 @@ public sealed class MainForm : Form
         _updatePasswordButton.Enabled = enabled;
         _uninstallButton.Enabled = enabled;
         _runCheckButton.Enabled = enabled;
-        _startServiceButton.Enabled = enabled;
-        _stopServiceButton.Enabled = enabled;
-        _restartServiceButton.Enabled = enabled;
         _checkUpdatesButton.Enabled = enabled;
         _updateNowButton.Enabled = enabled && (_lastUpdateResult?.IsUpdateAvailable ?? false);
+
+        if (!enabled)
+        {
+            _startServiceButton.Enabled = false;
+            _stopServiceButton.Enabled = false;
+            _restartServiceButton.Enabled = false;
+            return;
+        }
+
+        ApplyServiceButtonState();
+    }
+
+    private void ApplyServiceButtonState()
+    {
+        if (_isOperationRunning)
+        {
+            _startServiceButton.Enabled = false;
+            _stopServiceButton.Enabled = false;
+            _restartServiceButton.Enabled = false;
+            return;
+        }
+
+        if (!_serviceInstalled || _currentServiceStatus == null)
+        {
+            _startServiceButton.Enabled = false;
+            _stopServiceButton.Enabled = false;
+            _restartServiceButton.Enabled = false;
+            return;
+        }
+
+        switch (_currentServiceStatus.Value)
+        {
+            case ServiceControllerStatus.Running:
+                _startServiceButton.Enabled = false;
+                _stopServiceButton.Enabled = true;
+                _restartServiceButton.Enabled = true;
+                break;
+            case ServiceControllerStatus.Stopped:
+                _startServiceButton.Enabled = true;
+                _stopServiceButton.Enabled = false;
+                _restartServiceButton.Enabled = false;
+                break;
+            default:
+                _startServiceButton.Enabled = true;
+                _stopServiceButton.Enabled = true;
+                _restartServiceButton.Enabled = true;
+                break;
+        }
     }
 
     private void RestoreConsoleOutput()
