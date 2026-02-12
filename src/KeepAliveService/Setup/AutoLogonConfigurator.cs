@@ -58,6 +58,7 @@ public static class AutoLogonConfigurator
         Console.WriteLine();
         Console.WriteLine("=== Auto-Login Settings (non-credential) ===");
         WarnIfPolicyMayBeIgnoredOnHome();
+        ClearAutoLoginBlockers();
         DisableWindowsHelloRequirement();
         EnableArso();
         DisableLockScreen();
@@ -684,6 +685,80 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteWarning($"Remove AutoLogonCount - {ex.Message}");
+        }
+    }
+
+    private static void ClearAutoLoginBlockers()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(SystemPolicyPath);
+            var legalNotice = key?.GetValue("LegalNoticeText") as string;
+            var legalCaption = key?.GetValue("LegalNoticeCaption") as string;
+
+            if (!string.IsNullOrWhiteSpace(legalNotice) || !string.IsNullOrWhiteSpace(legalCaption))
+            {
+                WriteWarning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
+                try
+                {
+                    using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
+                    if (writableKey == null)
+                    {
+                        WriteError("Could not open policy key for LegalNotice auto-fix.");
+                        _failures++;
+                    }
+                    else
+                    {
+                        writableKey.SetValue("LegalNoticeText", string.Empty, RegistryValueKind.String);
+                        writableKey.SetValue("LegalNoticeCaption", string.Empty, RegistryValueKind.String);
+
+                        using var verifyKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath);
+                        var legalNoticeAfter = verifyKey?.GetValue("LegalNoticeText") as string;
+                        var legalCaptionAfter = verifyKey?.GetValue("LegalNoticeCaption") as string;
+
+                        if (!string.IsNullOrWhiteSpace(legalNoticeAfter) || !string.IsNullOrWhiteSpace(legalCaptionAfter))
+                        {
+                            WriteError("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
+                            _failures++;
+                        }
+                        else
+                        {
+                            WriteSuccess("LegalNoticeText/LegalNoticeCaption -> Cleared");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteError($"Could not remove LegalNotice blocker: {ex.Message}");
+                    _failures++;
+                }
+            }
+
+            var dontDisplay = key?.GetValue("DontDisplayLastUserName");
+            if (dontDisplay is int d && d == 1)
+            {
+                try
+                {
+                    using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
+                    if (writableKey == null)
+                    {
+                        WriteWarning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
+                    }
+                    else
+                    {
+                        writableKey.SetValue("DontDisplayLastUserName", 0, RegistryValueKind.DWord);
+                        WriteSuccess("DontDisplayLastUserName -> Set to 0 (was 1)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteWarning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteWarning($"Could not inspect auto-login blockers: {ex.Message}");
         }
     }
 

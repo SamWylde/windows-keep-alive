@@ -21,7 +21,7 @@ It is designed to keep the machine online, keep auto-login configured, and keep 
 
 Home/Core note: some settings in `HKLM\SOFTWARE\Policies\...` can be present in the registry but not enforced identically to Pro/Enterprise policy behavior. The app now warns when this applies.
 
-The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.2.0`).
+The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.2.1`).
 
 ## Quick Start (GUI, recommended)
 
