@@ -11,7 +11,7 @@ public static class NetworkConfigurator
     {
         _failures = 0;
         Console.WriteLine();
-        Console.WriteLine("=== Network / WiFi Configuration ===");
+        Console.WriteLine("=== Network Configuration ===");
 
         // Set wireless adapter power saving to Maximum Performance
         // GUID 19cbb8fa-... = Wireless Adapter Settings
@@ -36,7 +36,7 @@ public static class NetworkConfigurator
         // Apply changes
         RunPowerCfg("/setactive SCHEME_CURRENT", "Applied network power settings");
 
-        // Disable WiFi adapter power management via registry (the real fix)
+        // Disable adapter power management via registry (the real fix)
         DisableAdapterPowerManagement();
 
         return _failures == 0;
@@ -71,17 +71,13 @@ public static class NetworkConfigurator
                 var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
                 var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
 
-                // Only target wireless/WiFi adapters
-                var isWireless = driverDesc.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
-                                 driverDesc.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
-                                 driverDesc.Contains("WLAN", StringComparison.OrdinalIgnoreCase) ||
-                                 componentId.Contains("wireless", StringComparison.OrdinalIgnoreCase) ||
-                                 componentId.Contains("wlan", StringComparison.OrdinalIgnoreCase);
                 var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
                                 driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase);
+                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase);
 
-                if (!isWireless || isVirtual) continue;
+                if (isVirtual) continue;
 
                 adaptersFound++;
 
@@ -95,7 +91,7 @@ public static class NetworkConfigurator
 
             if (adaptersFound == 0)
             {
-                WriteWarning("No WiFi adapters found in registry (may be using Ethernet only)");
+                WriteWarning("No eligible physical network adapters found in registry");
             }
         }
         catch (UnauthorizedAccessException)

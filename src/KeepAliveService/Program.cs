@@ -237,6 +237,7 @@ internal static class Program
 
         builder.Services.AddHostedService<PowerKeepAliveWorker>();
         builder.Services.AddHostedService<ProcessWatchdogWorker>();
+        builder.Services.AddHostedService<ComplianceWatchdogWorker>();
 
         builder.Logging.AddEventLog(settings =>
         {

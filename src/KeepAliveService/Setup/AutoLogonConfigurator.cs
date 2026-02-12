@@ -51,6 +51,22 @@ public static class AutoLogonConfigurator
         return _failures == 0;
     }
 
+    public static bool ApplyNonCredentialSettings()
+    {
+        _failures = 0;
+
+        Console.WriteLine();
+        Console.WriteLine("=== Auto-Login Settings (non-credential) ===");
+        WarnIfPolicyMayBeIgnoredOnHome();
+        DisableWindowsHelloRequirement();
+        EnableArso();
+        DisableLockScreen();
+        RemoveAutoLogonCount();
+        ReassertForceAutoLogon();
+
+        return _failures == 0;
+    }
+
     private static void WarnIfPolicyMayBeIgnoredOnHome()
     {
         if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _)
@@ -276,17 +292,7 @@ public static class AutoLogonConfigurator
         RunAutologon(autologonPath, username, domain, password);
 
         // Set ForceAutoLogon to ensure it persists across multiple reboots
-        try
-        {
-            using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
-            key?.SetValue("ForceAutoLogon", "1", RegistryValueKind.String);
-            WriteSuccess("ForceAutoLogon -> Enabled");
-        }
-        catch (Exception ex)
-        {
-            WriteError($"Set ForceAutoLogon - {ex.Message}");
-            _failures++;
-        }
+        ReassertForceAutoLogon();
 
         // Verify configuration
         VerifyAutoLogon(username, domain);
@@ -646,6 +652,38 @@ public static class AutoLogonConfigurator
         catch (Exception ex)
         {
             WriteWarning($"Could not verify auto-login: {ex.Message}");
+        }
+    }
+
+    private static void ReassertForceAutoLogon()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
+            key?.SetValue("ForceAutoLogon", "1", RegistryValueKind.String);
+            WriteSuccess("ForceAutoLogon -> Enabled");
+        }
+        catch (Exception ex)
+        {
+            WriteError($"Set ForceAutoLogon - {ex.Message}");
+            _failures++;
+        }
+    }
+
+    private static void RemoveAutoLogonCount()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(WinlogonPath, writable: true);
+            if (key?.GetValue("AutoLogonCount") != null)
+            {
+                key.DeleteValue("AutoLogonCount", throwOnMissingValue: false);
+                WriteSuccess("AutoLogonCount -> Removed");
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteWarning($"Remove AutoLogonCount - {ex.Message}");
         }
     }
 
