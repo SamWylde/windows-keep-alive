@@ -58,7 +58,7 @@ public static class AutoLogonConfigurator
             return;
         }
 
-        WriteWarning("Windows Home/Core detected: policy-based lock-screen and screen-saver settings may not be enforced.");
+        WriteWarning("Windows Home/Core detected: policy-based lock-screen and screen-saver settings may not be fully enforced.");
         WriteWarning("Auto-logon still depends on runtime behavior after reboot; verify with --check or the Status tab.");
     }
 
@@ -89,18 +89,23 @@ public static class AutoLogonConfigurator
 
     private static void DisableWindowsHelloRequirement()
     {
-        // DevicePasswordLessBuildVersion = 0 allows password-based auto-login
-        // (by default Windows 11 requires Windows Hello which can't do auto-login)
+        // DevicePasswordLessBuildVersion = 0 allows password-based auto-login where supported.
+        // This key may not exist on every Windows 10/11 edition/build.
         try
         {
-            using var key = Registry.LocalMachine.CreateSubKey(PasswordlessPath, writable: true);
-            key?.SetValue("DevicePasswordLessBuildVersion", 0, RegistryValueKind.DWord);
+            using var key = Registry.LocalMachine.OpenSubKey(PasswordlessPath, writable: true);
+            if (key == null)
+            {
+                WriteInfo("Windows Hello passwordless requirement key not present; skipping (not applicable on this build/edition).");
+                return;
+            }
+
+            key.SetValue("DevicePasswordLessBuildVersion", 0, RegistryValueKind.DWord);
             WriteSuccess("Windows Hello passwordless requirement -> Disabled");
         }
         catch (Exception ex)
         {
-            WriteError($"Disable Windows Hello requirement - {ex.Message}");
-            _failures++;
+            WriteWarning($"Disable Windows Hello requirement - {ex.Message} (continuing)");
         }
     }
 

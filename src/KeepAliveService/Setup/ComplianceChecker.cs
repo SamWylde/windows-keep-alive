@@ -10,6 +10,8 @@ public static class ComplianceChecker
     private static int _failCount;
     private static int _warnCount;
     private static bool _isHomeOrCore;
+    private static bool _isWindows10;
+    private static bool _isWindows11;
 
     public static int RunCheck()
     {
@@ -17,6 +19,8 @@ public static class ComplianceChecker
         _failCount = 0;
         _warnCount = 0;
         _isHomeOrCore = false;
+        _isWindows10 = false;
+        _isWindows11 = false;
 
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -56,18 +60,20 @@ public static class ComplianceChecker
             return;
         }
 
-        if (info.BuildNumber < 22000)
+        if (!info.IsSupportedOsFamily)
         {
-            Fail($"Windows build: {info.BuildNumber} - requires Windows 11 build 22000+");
+            Fail($"Windows product: {info.ProductName} - requires Windows 10 or Windows 11");
             return;
         }
 
-        if (!info.ProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+        if (!info.SupportsBaseline)
         {
-            Fail($"Windows product: {info.ProductName} - requires Windows 11");
+            Fail($"Windows build: {info.BuildNumber} - requires Windows 10 build {WindowsEditionHelper.MinSupportedBuild}+ or Windows 11");
             return;
         }
 
+        _isWindows10 = info.IsWindows10;
+        _isWindows11 = info.IsWindows11;
         _isHomeOrCore = info.IsHomeOrCore;
         Pass($"Windows Edition: {info.EditionId} ({info.ProductName}, Build {info.BuildNumber})");
         if (_isHomeOrCore)
@@ -130,14 +136,55 @@ public static class ComplianceChecker
         CheckRegistryString(Registry.LocalMachine, winlogonPath,
             "ForceAutoLogon", "1", "ForceAutoLogon");
 
-        // Check Windows Hello is not required
-        CheckRegistryDword(Registry.LocalMachine,
-            @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device",
-            "DevicePasswordLessBuildVersion", 0,
-            "Windows Hello passwordless requirement disabled");
+        // Check Windows Hello passwordless requirement in a capability-aware way.
+        CheckPasswordlessRequirement();
 
         // Check for blockers
         CheckAutoLoginBlockers();
+    }
+
+    private static void CheckPasswordlessRequirement()
+    {
+        const string passwordlessPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device";
+        const string valueName = "DevicePasswordLessBuildVersion";
+
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(passwordlessPath);
+            if (key == null)
+            {
+                var osLabel = _isWindows10 ? "Windows 10" : _isWindows11 ? "Windows 11" : "this Windows version";
+                Pass($"Windows Hello passwordless requirement key not present ({osLabel}); treating as not applicable.");
+                return;
+            }
+
+            var value = key.GetValue(valueName);
+            if (value is int intValue)
+            {
+                if (intValue == 0)
+                {
+                    Pass("Windows Hello passwordless requirement disabled");
+                }
+                else
+                {
+                    Warn($"Windows Hello passwordless requirement = {intValue} (expected 0 for best auto-login reliability)");
+                }
+
+                return;
+            }
+
+            if (value == null)
+            {
+                Warn("Windows Hello passwordless requirement value is not set; behavior may vary by build/edition.");
+                return;
+            }
+
+            Warn($"Windows Hello passwordless requirement value has unexpected type: {value.GetType().Name}");
+        }
+        catch
+        {
+            Warn("Could not read Windows Hello passwordless requirement key; continuing.");
+        }
     }
 
     private static void CheckAutoLoginBlockers()

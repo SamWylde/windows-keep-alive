@@ -66,7 +66,7 @@ public static class SignInReadinessDetector
             }
 
             var message =
-                "Password sign-in appears disabled by Windows Hello/passwordless settings: " +
+                "Password sign-in appears disabled by Windows Hello/passwordless settings on Windows 10/11: " +
                 string.Join("; ", reasons) +
                 ". Auto-logon requires password-based sign-in.";
 
@@ -84,7 +84,7 @@ public static class SignInReadinessDetector
         {
             return new SignInReadinessResult(
                 SignInReadinessStatus.Warning,
-                "Could not fully read all passwordless policy keys. Continuing with credential validation.",
+                "Could not fully read all Windows 10/11 passwordless policy keys. Continuing with credential validation.",
                 keyReadErrors);
         }
 
