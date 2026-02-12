@@ -7,6 +7,16 @@ public sealed record WindowsEditionInfo(
     string ProductName,
     int BuildNumber)
 {
+    public bool IsWindows10 =>
+        ProductName.Contains("Windows 10", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsWindows11 =>
+        ProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsSupportedOsFamily => IsWindows10 || IsWindows11;
+
+    public bool SupportsBaseline => IsSupportedOsFamily && BuildNumber >= WindowsEditionHelper.MinSupportedBuild;
+
     public bool IsHomeOrCore =>
         EditionId.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
         EditionId.Contains("Home", StringComparison.OrdinalIgnoreCase) ||
@@ -16,6 +26,7 @@ public sealed record WindowsEditionInfo(
 public static class WindowsEditionHelper
 {
     private const string CurrentVersionPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    public const int MinSupportedBuild = 19041;
 
     public static bool TryGetWindowsEditionInfo(out WindowsEditionInfo? info, out string? error)
     {

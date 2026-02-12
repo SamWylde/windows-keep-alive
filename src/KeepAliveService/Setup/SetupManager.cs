@@ -180,15 +180,15 @@ public static class SetupManager
             return false;
         }
 
-        if (info.BuildNumber < 22000)
+        if (!info.IsSupportedOsFamily)
         {
-            WriteError($"Windows build {info.BuildNumber} detected. This tool requires Windows 11 (build 22000+).");
+            WriteError($"Windows product '{info.ProductName}' detected. This tool requires Windows 10 or Windows 11.");
             return false;
         }
 
-        if (!info.ProductName.Contains("Windows 11", StringComparison.OrdinalIgnoreCase))
+        if (!info.SupportsBaseline)
         {
-            WriteError($"Windows product '{info.ProductName}' detected. This tool requires Windows 11.");
+            WriteError($"Windows build {info.BuildNumber} detected. This tool requires Windows 10 (build {WindowsEditionHelper.MinSupportedBuild}+) or Windows 11.");
             return false;
         }
 

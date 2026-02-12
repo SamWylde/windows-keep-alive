@@ -67,7 +67,7 @@ public sealed class MainForm : Form
         _originalConsoleOut = Console.Out;
         _originalConsoleError = Console.Error;
 
-        Text = "Windows Keep Alive";
+        Text = $"Windows Keep Alive v{FormatVersion(Assembly.GetExecutingAssembly().GetName().Version)}";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(900, 650);
         Size = new Size(1080, 760);

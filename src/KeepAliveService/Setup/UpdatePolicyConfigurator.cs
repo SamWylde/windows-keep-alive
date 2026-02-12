@@ -31,7 +31,7 @@ public static class UpdatePolicyConfigurator
             return;
         }
 
-        WriteWarning("Windows Home/Core detected: Windows Update policy values under HKLM\\SOFTWARE\\Policies may not be fully enforced.");
+        WriteWarning("Windows Home/Core detected: some Windows Update policy values under HKLM\\SOFTWARE\\Policies may not be fully enforced on Windows 10/11.");
         WriteWarning("Behavior will still depend on the OS update stack. Use compliance checks after reboot to validate runtime behavior.");
     }
 

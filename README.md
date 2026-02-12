@@ -1,6 +1,6 @@
 # Windows Keep Alive
 
-Single-EXE Windows 11 keep-alive utility for laptops used like home servers.
+Single-EXE Windows 10/11 keep-alive utility for laptops used like home servers.
 
 It is designed to keep the machine online, keep auto-login configured, and keep TeamViewer available after reboots and updates.
 
@@ -15,11 +15,12 @@ It is designed to keep the machine online, keep auto-login configured, and keep 
 
 ## Requirements
 
-- Windows 11 (Core/Home, Pro, Enterprise, or Education)
+- Windows 10 (build 19041+) or Windows 11 (Home, Pro, Enterprise, or Education)
 - Administrator rights for setup/configuration
 - TeamViewer installed
 
 Home/Core note: some settings in `HKLM\SOFTWARE\Policies\...` can be present in the registry but not enforced identically to Pro/Enterprise policy behavior. The app now warns when this applies.
+The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.1.8`).
 
 ## Quick Start (GUI, recommended)
 
