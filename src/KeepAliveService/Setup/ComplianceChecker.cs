@@ -324,7 +324,7 @@ public static class ComplianceChecker
         // Lid close action
         // SUB_BUTTONS GUID = 4f971e89-eebd-4455-a8de-9e59040e7347
         // LIDACTION GUID = 5ca83367-6e45-459f-a27b-476b1d01c936
-        CheckLidCloseAction();
+        CheckPowerCfgBothAcDc("Lid close action", "4f971e89-eebd-4455-a8de-9e59040e7347", "5ca83367-6e45-459f-a27b-476b1d01c936", 0, "Do Nothing");
 
         // Hybrid sleep
         // HYBRIDSLEEP GUID = 94ac6d29-73ce-41a6-809f-6363ba21b47e
@@ -360,30 +360,40 @@ public static class ComplianceChecker
 
             var expectedHex = $"0x{expectedValue:x8}";
             var lines = output.Split('\n');
+            var acFound = false;
+            var dcFound = false;
             var acOk = false;
             var dcOk = false;
+            string? acValue = null;
+            string? dcValue = null;
 
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
                 if (trimmed.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase))
                 {
+                    acFound = true;
                     acOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
+                    if (!acOk) acValue = trimmed;
                 }
                 else if (trimmed.Contains("Current DC Power Setting Index", StringComparison.OrdinalIgnoreCase))
                 {
+                    dcFound = true;
                     dcOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
+                    if (!dcOk) dcValue = trimmed;
                 }
             }
 
             if (acOk && dcOk)
                 Pass($"{name}: {friendlyValue} (AC and DC)");
-            else if (acOk)
-                Fail($"{name}: {friendlyValue} on AC, but NOT on DC");
-            else if (dcOk)
-                Fail($"{name}: {friendlyValue} on DC, but NOT on AC");
+            else if (!acFound && !dcFound)
+                Warn($"{name}: setting not reported by powercfg on this build (applied but not verifiable)");
+            else if (acOk && !dcFound)
+                Warn($"{name}: {friendlyValue} on AC; DC not reported by powercfg");
+            else if (dcOk && !acFound)
+                Warn($"{name}: {friendlyValue} on DC; AC not reported by powercfg");
             else
-                Fail($"{name}: not set to {friendlyValue}");
+                Fail($"{name}: not set to {friendlyValue} (AC={acValue ?? "not found"}, DC={dcValue ?? "not found"})");
         }
         catch
         {
@@ -452,56 +462,6 @@ public static class ComplianceChecker
         }
     }
 
-    private static void CheckLidCloseAction()
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powercfg.exe",
-                Arguments = "/query SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            var output = process?.StandardOutput.ReadToEnd() ?? "";
-            process?.WaitForExit(10_000);
-
-            // Parse both AC and DC lines specifically
-            var lines = output.Split('\n');
-            var acOk = false;
-            var dcOk = false;
-
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase))
-                {
-                    acOk = trimmed.Contains("0x00000000", StringComparison.OrdinalIgnoreCase);
-                }
-                else if (trimmed.Contains("Current DC Power Setting Index", StringComparison.OrdinalIgnoreCase))
-                {
-                    dcOk = trimmed.Contains("0x00000000", StringComparison.OrdinalIgnoreCase);
-                }
-            }
-
-            if (acOk && dcOk)
-                Pass("Lid close action: Do Nothing (AC and DC)");
-            else if (acOk)
-                Fail("Lid close action: Do Nothing on AC, but NOT on DC");
-            else if (dcOk)
-                Fail("Lid close action: Do Nothing on DC, but NOT on AC");
-            else
-                Fail("Lid close action is not set to 'Do Nothing'");
-        }
-        catch
-        {
-            Warn("Could not check lid close action");
-        }
-    }
-
     private static void CheckNetworkSettings()
     {
         Console.WriteLine();
@@ -552,9 +512,14 @@ public static class ComplianceChecker
 
                 var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
                                 driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
+                                driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
                                 componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
                                 componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase);
+                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
+                                componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
 
                 if (isVirtual)
                 {
