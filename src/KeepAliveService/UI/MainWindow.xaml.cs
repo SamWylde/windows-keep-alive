@@ -118,6 +118,15 @@ public sealed partial class MainWindow : FluentWindow
         // Tray icon
         _trayIcon = CreateTrayIcon();
 
+        // Prevent visible window flash during tray-startup. Application.Run()
+        // calls Show() before Loaded fires, so without this the window briefly
+        // appears with broken rendering while the desktop is still loading.
+        if (_startMinimized)
+        {
+            WindowState = WindowState.Minimized;
+            ShowInTaskbar = false;
+        }
+
         Loaded += async (_, _) => await OnLoadedAsync();
         Closing += OnWindowClosing;
         Closed += (_, _) => RestoreConsoleOutput();
@@ -1033,6 +1042,7 @@ public sealed partial class MainWindow : FluentWindow
 
     private void RestoreFromTray()
     {
+        ShowInTaskbar = true;
         Show();
         WindowState = WindowState.Normal;
         _trayIcon.Visible = false;
