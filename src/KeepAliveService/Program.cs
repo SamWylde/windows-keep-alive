@@ -17,6 +17,12 @@ internal static class Program
     {
         if (args.Length > 0)
         {
+            // --tray-startup is a GUI mode flag, not a CLI command
+            if (args[0].Equals("--tray-startup", StringComparison.OrdinalIgnoreCase))
+            {
+                return RunInteractiveGuiMode(args, startMinimized: true);
+            }
+
             return RunCommandLineMode(args);
         }
 
@@ -58,6 +64,14 @@ internal static class Program
                 ServiceInstaller.Uninstall();
                 return 0;
 
+            case "--restore":
+                if (!RequireAdmin("--restore"))
+                {
+                    return 1;
+                }
+
+                return RestoreManager.RunRestore();
+
             case "--help":
             case "-h":
             case "/?":
@@ -72,7 +86,7 @@ internal static class Program
         }
     }
 
-    private static int RunInteractiveGuiMode(string[] args)
+    private static int RunInteractiveGuiMode(string[] args, bool startMinimized = false)
     {
         Mutex? singleInstanceMutex = null;
         EventWaitHandle? activationEvent = null;
@@ -99,7 +113,7 @@ internal static class Program
             }
 
             ApplicationConfiguration.Initialize();
-            var form = new MainForm();
+            var form = new MainForm(startMinimized);
             StartActivationListener(form, out activationEvent, out activationListenerCts, out activationListenerTask);
             Application.Run(form);
             return 0;
@@ -332,7 +346,9 @@ internal static class Program
         Console.WriteLine("  KeepAliveService.exe --setup             First-time setup (run as Admin)");
         Console.WriteLine("  KeepAliveService.exe --check             Verify all settings are correct");
         Console.WriteLine("  KeepAliveService.exe --update-password   Update auto-login password");
-        Console.WriteLine("  KeepAliveService.exe --uninstall         Remove the service");
+        Console.WriteLine("  KeepAliveService.exe --restore           Restore original settings and uninstall");
+        Console.WriteLine("  KeepAliveService.exe --uninstall         Remove the service only");
+        Console.WriteLine("  KeepAliveService.exe --tray-startup      Launch GUI minimized to system tray");
         Console.WriteLine("  KeepAliveService.exe --help              Show this help");
         Console.WriteLine();
         Console.WriteLine("When run without arguments:");

@@ -13,7 +13,7 @@ public static class ComplianceChecker
     private static bool _isWindows10;
     private static bool _isWindows11;
 
-    public static int RunCheck()
+    public static int RunCheck(bool includeStartupTask = true)
     {
         _passCount = 0;
         _failCount = 0;
@@ -35,6 +35,7 @@ public static class ComplianceChecker
         CheckPowerSettings();
         CheckNetworkSettings();
         CheckService();
+        if (includeStartupTask) CheckStartupTask();
         CheckTeamViewer();
 
         Console.WriteLine();
@@ -578,6 +579,21 @@ public static class ComplianceChecker
         catch (Exception ex)
         {
             Fail($"Could not check service: {ex.Message}");
+        }
+    }
+
+    private static void CheckStartupTask()
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Startup Task ---");
+
+        if (StartupTaskManager.IsTaskPresent())
+        {
+            Pass("Startup task present (GUI auto-start at logon)");
+        }
+        else
+        {
+            Fail("Startup task missing (GUI will not auto-start at logon)");
         }
     }
 
