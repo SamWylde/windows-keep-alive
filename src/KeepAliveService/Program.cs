@@ -125,8 +125,15 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            try
+            {
+                var crashLog = Path.Combine(Path.GetTempPath(), "keepalive-crash.log");
+                File.WriteAllText(crashLog, $"{DateTime.Now:O}{Environment.NewLine}{ex}");
+            }
+            catch { /* Best effort */ }
+
             System.Windows.MessageBox.Show(
-                $"Application startup failed: {ex.Message}",
+                $"Application startup failed: {ex}",
                 "Windows Keep Alive",
                 System.Windows.MessageBoxButton.OK,
                 System.Windows.MessageBoxImage.Error);

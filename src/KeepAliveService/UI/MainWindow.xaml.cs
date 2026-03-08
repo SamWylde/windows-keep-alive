@@ -81,13 +81,7 @@ public sealed partial class MainWindow : FluentWindow
         Console.SetOut(_outputWriter);
         Console.SetError(_outputWriter);
 
-        // Account type combo
-        AccountTypeBox.Items.Add(new AccountTypeOption("Microsoft Account", AccountType.MicrosoftAccount));
-        AccountTypeBox.Items.Add(new AccountTypeOption("Local Account", AccountType.LocalAccount));
-        AccountTypeBox.Items.Add(new AccountTypeOption("Domain / Work Account", AccountType.DomainOrWorkAccount));
-        AccountTypeBox.SelectedIndex = 0;
-
-        // Timers
+        // Timers (must be initialized before ComboBox population, which fires events)
         _updateTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromHours(Math.Max(1, _settings.UpdateCheckIntervalHours)),
@@ -103,6 +97,14 @@ public sealed partial class MainWindow : FluentWindow
             _credentialPersistTimer.Stop();
             PersistCredentialInputs();
         };
+
+        // Account type combo (fires SelectionChanged → Credential_Changed → QueueCredentialPersistence)
+        _suppressCredentialPersistence = true;
+        AccountTypeBox.Items.Add(new AccountTypeOption("Microsoft Account", AccountType.MicrosoftAccount));
+        AccountTypeBox.Items.Add(new AccountTypeOption("Local Account", AccountType.LocalAccount));
+        AccountTypeBox.Items.Add(new AccountTypeOption("Domain / Work Account", AccountType.DomainOrWorkAccount));
+        AccountTypeBox.SelectedIndex = 0;
+        _suppressCredentialPersistence = false;
 
         // Status bar
         VersionStatus.Text = $"v{version}";
