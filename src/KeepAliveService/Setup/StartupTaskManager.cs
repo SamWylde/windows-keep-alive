@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using KeepAliveService.Update;
+using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
 
@@ -17,8 +18,8 @@ public static class StartupTaskManager
             var exePath = InstallManager.CanonicalExePath;
             if (!File.Exists(exePath))
             {
-                WriteWarning($"Executable not found at canonical path: {exePath}");
-                WriteWarning("Startup task will be created but may not work until the app is installed.");
+                ConsoleOutput.Warning($"Executable not found at canonical path: {exePath}");
+                ConsoleOutput.Warning("Startup task will be created but may not work until the app is installed.");
             }
 
             // schtasks /create /tn "WindowsKeepAlive"
@@ -30,15 +31,16 @@ public static class StartupTaskManager
 
             if (!RunSchtasks(args, "Startup task created (GUI auto-start at logon)"))
             {
-                WriteError("Failed to create startup scheduled task");
+                ConsoleOutput.Error("Failed to create startup scheduled task");
                 return false;
             }
 
+            WarnIfUserMismatch();
             return true;
         }
         catch (Exception ex)
         {
-            WriteError($"Startup task creation failed: {ex.Message}");
+            ConsoleOutput.Error($"Startup task creation failed: {ex.Message}");
             return false;
         }
     }
@@ -56,7 +58,7 @@ public static class StartupTaskManager
         }
         catch (Exception ex)
         {
-            WriteWarning($"Could not remove startup task: {ex.Message}");
+            ConsoleOutput.Warning($"Could not remove startup task: {ex.Message}");
             return false;
         }
     }
@@ -85,6 +87,80 @@ public static class StartupTaskManager
         }
     }
 
+    /// <summary>
+    /// Validates that the startup task exists AND has the correct action (canonical exe path
+    /// with --tray-startup) and runs with highest privileges.
+    /// </summary>
+    public static (bool exists, bool correct, string? detail) ValidateTask()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = $"/query /tn \"{TaskName}\" /xml",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(psi);
+            var output = process?.StandardOutput.ReadToEnd() ?? "";
+            process?.WaitForExit(10_000);
+
+            if (process?.ExitCode != 0)
+            {
+                return (false, false, "Task not found");
+            }
+
+            var expectedExe = InstallManager.CanonicalExePath;
+            var hasCorrectAction = output.Contains(expectedExe, StringComparison.OrdinalIgnoreCase)
+                                   && output.Contains("--tray-startup", StringComparison.OrdinalIgnoreCase);
+            var hasHighestPriv = output.Contains("HighestAvailable", StringComparison.OrdinalIgnoreCase);
+
+            if (!hasCorrectAction)
+            {
+                return (true, false, $"Task action does not point to {expectedExe} --tray-startup");
+            }
+
+            if (!hasHighestPriv)
+            {
+                return (true, false, "Task is not configured to run with highest privileges");
+            }
+
+            return (true, true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, false, ex.Message);
+        }
+    }
+
+    private static void WarnIfUserMismatch()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon");
+            var autologonUser = key?.GetValue("DefaultUserName") as string;
+            if (string.IsNullOrWhiteSpace(autologonUser)) return;
+
+            var processUser = Environment.UserName;
+            if (!autologonUser.Contains(processUser, StringComparison.OrdinalIgnoreCase) &&
+                !processUser.Contains(autologonUser, StringComparison.OrdinalIgnoreCase))
+            {
+                ConsoleOutput.Warning(
+                    $"Startup task was created by '{processUser}' but auto-login user is '{autologonUser}'. " +
+                    $"The task may not run under the correct account.");
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     private static bool RunSchtasks(string arguments, string successMessage)
     {
         try
@@ -100,48 +176,34 @@ public static class StartupTaskManager
             };
 
             using var process = Process.Start(psi);
-            var output = process?.StandardOutput.ReadToEnd()?.Trim() ?? "";
-            var error = process?.StandardError.ReadToEnd()?.Trim() ?? "";
-            process?.WaitForExit(15_000);
-
-            if (process?.ExitCode == 0)
+            if (process == null)
             {
-                WriteSuccess(successMessage);
+                ConsoleOutput.Error($"{successMessage} - could not start schtasks.exe");
+                return false;
+            }
+
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            process.WaitForExit(15_000);
+            Task.WaitAll([outputTask, errorTask], 5000);
+            var output = outputTask.IsCompletedSuccessfully ? outputTask.Result.Trim() : "";
+            var error = errorTask.IsCompletedSuccessfully ? errorTask.Result.Trim() : "";
+
+            if (process.ExitCode == 0)
+            {
+                ConsoleOutput.Success(successMessage);
                 return true;
             }
 
             var msg = !string.IsNullOrEmpty(error) ? error : output;
-            WriteError($"{successMessage} - schtasks failed: {msg}");
+            ConsoleOutput.Error($"{successMessage} - schtasks failed: {msg}");
             return false;
         }
         catch (Exception ex)
         {
-            WriteError($"{successMessage} - {ex.Message}");
+            ConsoleOutput.Error($"{successMessage} - {ex.Message}");
             return false;
         }
     }
 
-    private static void WriteSuccess(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
 }

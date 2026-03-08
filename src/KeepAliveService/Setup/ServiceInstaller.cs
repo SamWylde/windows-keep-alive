@@ -17,11 +17,11 @@ public static class ServiceInstaller
         var exePath = GetServiceExePath();
         if (exePath == null)
         {
-            WriteError("Could not determine service executable path");
+            ConsoleOutput.Error("Could not determine service executable path");
             return false;
         }
 
-        WriteInfo($"Service executable: {exePath}");
+        ConsoleOutput.Info($"Service executable: {exePath}");
 
         // Stop and remove existing service if present
         RemoveExistingService();
@@ -30,7 +30,7 @@ public static class ServiceInstaller
         if (!RunSc($"create {ServiceName} binPath= \"\\\"{exePath}\\\"\" start= auto DisplayName= \"{DisplayName}\"",
                 "Service created"))
         {
-            WriteError("Failed to create service. Ensure you are running as Administrator.");
+            ConsoleOutput.Error("Failed to create service. Ensure you are running as Administrator.");
             return false;
         }
 
@@ -51,12 +51,12 @@ public static class ServiceInstaller
             using var sc = new ServiceController(ServiceName);
             sc.Start();
             sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
-            WriteSuccess($"Service started and running");
+            ConsoleOutput.Success($"Service started and running");
             return true;
         }
         catch (Exception ex)
         {
-            WriteError($"Failed to start service: {ex.Message}");
+            ConsoleOutput.Error($"Failed to start service: {ex.Message}");
             Console.WriteLine("  Try starting it manually: sc start KeepAliveService");
             return false;
         }
@@ -75,17 +75,17 @@ public static class ServiceInstaller
             {
                 sc.Stop();
                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
-                WriteSuccess("Service stopped");
+                ConsoleOutput.Success("Service stopped");
             }
         }
         catch (InvalidOperationException)
         {
-            WriteInfo("Service not found (may already be uninstalled)");
+            ConsoleOutput.Info("Service not found (may already be uninstalled)");
             return true; // Already gone
         }
         catch (Exception ex)
         {
-            WriteWarning($"Error stopping service: {ex.Message}");
+            ConsoleOutput.Warning($"Error stopping service: {ex.Message}");
         }
 
         // Delete the service
@@ -97,11 +97,11 @@ public static class ServiceInstaller
         // Verify the service is actually gone
         if (IsServicePresent())
         {
-            WriteError("Service still exists after deletion attempt");
+            ConsoleOutput.Error("Service still exists after deletion attempt");
             return false;
         }
 
-        WriteSuccess("Uninstall complete");
+        ConsoleOutput.Success("Uninstall complete");
         return true;
     }
 
@@ -126,7 +126,7 @@ public static class ServiceInstaller
             using var sc = new ServiceController(ServiceName);
             var status = sc.Status; // This throws if service doesn't exist
 
-            WriteInfo("Existing service found, removing...");
+            ConsoleOutput.Info("Existing service found, removing...");
 
             if (status == ServiceControllerStatus.Running)
             {
@@ -174,8 +174,8 @@ public static class ServiceInstaller
         if (exePath != null &&
             Path.GetFileName(exePath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
         {
-            WriteWarning("Running via 'dotnet run' - cannot register dotnet.exe as a service.");
-            WriteInfo("Build a published exe first: dotnet publish -c Release -o publish --self-contained true -p:PublishSingleFile=true");
+            ConsoleOutput.Warning("Running via 'dotnet run' - cannot register dotnet.exe as a service.");
+            ConsoleOutput.Info("Build a published exe first: dotnet publish -c Release -o publish --self-contained true -p:PublishSingleFile=true");
 
             // Fall back to looking for a published exe
             var assemblyDir = AppContext.BaseDirectory;
@@ -219,58 +219,35 @@ public static class ServiceInstaller
             };
 
             using var process = Process.Start(psi);
-            var output = process?.StandardOutput.ReadToEnd()?.Trim() ?? "";
-            var error = process?.StandardError.ReadToEnd()?.Trim() ?? "";
-            process?.WaitForExit(15_000);
-
-            if (process?.ExitCode == 0)
+            if (process == null)
             {
-                WriteSuccess(successMessage);
+                ConsoleOutput.Error($"{successMessage} - could not start sc.exe");
+                return false;
+            }
+
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            process.WaitForExit(15_000);
+            Task.WaitAll([outputTask, errorTask], 5000);
+            var output = outputTask.IsCompletedSuccessfully ? outputTask.Result.Trim() : "";
+            var error = errorTask.IsCompletedSuccessfully ? errorTask.Result.Trim() : "";
+
+            if (process.ExitCode == 0)
+            {
+                ConsoleOutput.Success(successMessage);
                 return true;
             }
             else
             {
                 var msg = !string.IsNullOrEmpty(error) ? error : output;
-                WriteError($"{successMessage} - sc.exe failed: {msg}");
+                ConsoleOutput.Error($"{successMessage} - sc.exe failed: {msg}");
                 return false;
             }
         }
         catch (Exception ex)
         {
-            WriteError($"{successMessage} - {ex.Message}");
+            ConsoleOutput.Error($"{successMessage} - {ex.Message}");
             return false;
         }
-    }
-
-    private static void WriteSuccess(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteInfo(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("  [INFO] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
     }
 }

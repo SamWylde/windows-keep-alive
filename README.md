@@ -54,6 +54,14 @@ Credentials are persisted between launches. Passwords are encrypted with Windows
 
 All original settings are backed up before any changes are made. Run **Restore** to undo everything.
 
+## Reliability
+
+- **Locale-independent** — compliance checks and settings backup/restore work on non-English Windows
+- **Thread-safe** — all configurator state is thread-local, safe for concurrent operation
+- **Cross-process safe** — settings file writes use a named mutex to prevent corruption
+- **Credential protection** — DPAPI-encrypted passwords are preserved even when decryption fails on a different user profile
+- **Deadlock-free** — all external process stdout/stderr reads use async patterns to avoid pipe buffer deadlocks
+
 ## Background Service
 
 The service runs three workers:

@@ -43,6 +43,7 @@ public sealed partial class MainWindow : FluentWindow
     private bool _isOperationRunning;
     private bool _isUpdateCheckRunning;
     private bool _suppressCredentialPersistence;
+    private bool _passwordDecryptFailed;
     private bool _isStartupUpdateCheck;
     private bool _startupUpdatePromptShown;
     private readonly bool _startMinimized;
@@ -77,7 +78,6 @@ public sealed partial class MainWindow : FluentWindow
         _outputParagraph = new Paragraph { Margin = new Thickness(0) };
         OutputBox.Document = new FlowDocument(_outputParagraph)
         {
-            PageWidth = 10000,
             FontFamily = new FontFamily("Consolas"),
             FontSize = 14,
         };
@@ -433,8 +433,8 @@ public sealed partial class MainWindow : FluentWindow
     {
         await RunOperationAsync("Running compliance check", async () =>
         {
-            var capture = new StringWriter();
-            var teeWriter = new TeeTextWriter(_outputWriter, capture);
+            using var capture = new StringWriter();
+            using var teeWriter = new TeeTextWriter(_outputWriter, capture);
 
             var previousOut = Console.Out;
             var previousError = Console.Error;
@@ -453,8 +453,11 @@ public sealed partial class MainWindow : FluentWindow
                 Console.SetError(previousError);
             }
 
-            ParseComplianceSummary(capture.ToString(), exitCode);
+            var capturedOutput = capture.ToString();
+            ParseComplianceSummary(capturedOutput, exitCode);
             LastCheckLabel.Text = $"Last check: {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+            StatusOutputBox.Text = capturedOutput.TrimEnd();
+            StatusOutputBox.ScrollToEnd();
         });
     }
 
@@ -489,6 +492,11 @@ public sealed partial class MainWindow : FluentWindow
     private async Task CheckForUpdatesAsync(bool force)
     {
         if (_isUpdateCheckRunning)
+            return;
+
+        // Skip timer-triggered checks while an operation holds Console.Out/Error redirected,
+        // to avoid polluting captured compliance output.
+        if (!force && _isOperationRunning)
             return;
 
         _isUpdateCheckRunning = true;
@@ -632,20 +640,24 @@ public sealed partial class MainWindow : FluentWindow
         }
         finally
         {
+            _isOperationRunning = false;
             SetControlsEnabled(true);
             RefreshServiceStatus();
             RefreshLogViewer();
             UpdateStatusStrip.Text = _lastUpdateResult?.IsUpdateAvailable == true
                 ? $"Update available: v{FormatVersion(_lastUpdateResult.LatestVersion)}"
                 : previousStatusText;
-            _isOperationRunning = false;
         }
     }
 
     // ───────────────────── Credentials ─────────────────────
 
     private void Credential_Changed(object sender, EventArgs e) => QueueCredentialPersistence();
-    private void Password_Changed(object sender, RoutedEventArgs e) => QueueCredentialPersistence();
+    private void Password_Changed(object sender, RoutedEventArgs e)
+    {
+        _passwordDecryptFailed = false;
+        QueueCredentialPersistence();
+    }
 
     private void AccountType_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
@@ -765,6 +777,8 @@ public sealed partial class MainWindow : FluentWindow
                 DomainBox.Text = _settings.SavedDomain;
 
             var savedPassword = _settings.GetSavedPassword();
+            _passwordDecryptFailed = !string.IsNullOrEmpty(_settings.SavedPasswordEncrypted)
+                                     && savedPassword == null;
             if (!string.IsNullOrEmpty(savedPassword))
                 PasswordHidden.Password = savedPassword;
         }
@@ -787,7 +801,8 @@ public sealed partial class MainWindow : FluentWindow
             _settings.SavedDomain = DomainBox.Text.Trim();
             if (AccountTypeBox.SelectedItem is AccountTypeOption option)
                 _settings.SavedAccountType = option.Type.ToString();
-            _settings.SetSavedPassword(CurrentPassword);
+            if (!_passwordDecryptFailed)
+                _settings.SetSavedPassword(CurrentPassword);
             _settings.Save();
         }
         catch (Exception ex)
@@ -867,15 +882,36 @@ public sealed partial class MainWindow : FluentWindow
             if (fileInfo.Length == _lastLogLength)
                 return;
 
-            _lastLogLength = fileInfo.Length;
-
             using var stream = new FileStream(AppSettings.LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            var text = reader.ReadToEnd();
-            if (text.Length > MaxLogChars)
-                text = text[^MaxLogChars..];
 
-            LogViewerBox.Text = text;
+            // Log was truncated/rotated — full re-read
+            if (fileInfo.Length < _lastLogLength || _lastLogLength <= 0)
+            {
+                _lastLogLength = fileInfo.Length;
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                var text = reader.ReadToEnd();
+                if (text.Length > MaxLogChars)
+                    text = text[^MaxLogChars..];
+                LogViewerBox.Text = text;
+                LogViewerBox.ScrollToEnd();
+                return;
+            }
+
+            // Incremental tail — seek to last position and append only new content
+            stream.Seek(_lastLogLength, SeekOrigin.Begin);
+            _lastLogLength = fileInfo.Length;
+            using var tailReader = new StreamReader(stream, Encoding.UTF8);
+            var newContent = tailReader.ReadToEnd();
+
+            if (string.IsNullOrEmpty(newContent))
+                return;
+
+            LogViewerBox.AppendText(newContent);
+
+            // Trim from the front if total length exceeds cap
+            if (LogViewerBox.Text.Length > MaxLogChars)
+                LogViewerBox.Text = LogViewerBox.Text[^MaxLogChars..];
+
             LogViewerBox.ScrollToEnd();
         }
         catch (Exception ex)
@@ -1115,23 +1151,9 @@ public sealed partial class MainWindow : FluentWindow
         return $"{version.Major}.{version.Minor}.{build}";
     }
 
-    private static string FormatBytes(long? bytes)
-    {
-        if (bytes == null) return "unknown";
-        var value = bytes.Value;
-        string[] suffixes = ["B", "KB", "MB", "GB"];
-        var order = 0;
-        double size = value;
-        while (size >= 1024 && order < suffixes.Length - 1) { order++; size /= 1024; }
-        return $"{size:0.##} {suffixes[order]}";
-    }
+    private static string FormatBytes(long? bytes) => Helpers.FormatBytes(bytes);
 
-    private static bool IsRunningAsAdmin()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        var principal = new WindowsPrincipal(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
-    }
+    private static bool IsRunningAsAdmin() => Helpers.IsRunningAsAdmin();
 
     // ───────────────────── Inner types ─────────────────────
 
