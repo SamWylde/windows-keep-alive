@@ -1,92 +1,112 @@
 # Windows Keep Alive
 
-Single-EXE Windows 10/11 keep-alive utility for laptops used like home servers.
+[![Latest Release](https://img.shields.io/github/v/release/SamWylde/windows-keep-alive?style=flat-square)](https://github.com/SamWylde/windows-keep-alive/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue?style=flat-square&logo=windows)](https://github.com/SamWylde/windows-keep-alive)
+[![.NET](https://img.shields.io/badge/.NET-8.0-purple?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
+[![Single EXE](https://img.shields.io/badge/deploy-single%20EXE-green?style=flat-square)](https://github.com/SamWylde/windows-keep-alive/releases/latest)
 
-It is designed to keep the machine online, keep auto-login configured, and keep TeamViewer available after reboots and updates.
+Turn any Windows laptop into an always-on, always-logged-in server. One self-contained EXE — no installers, no dependencies, no runtime required.
 
-## What It Does
+## Features
 
-- Runs as a background Windows Service to prevent sleep and watch TeamViewer
-- Applies keep-alive setup from a GUI (no required CLI flags)
-- Configures update/restart, auto-login, power, and network settings
-- Self-installs to `C:\Program Files\WindowsKeepAlive\KeepAliveService.exe`
-- Stores app state in `C:\ProgramData\WindowsKeepAlive\`
-- Checks GitHub releases and can apply in-place EXE updates
+- **Sleep & hibernate prevention** — keeps the machine awake 24/7 via a background Windows Service
+- **Auto-login configuration** — sets up automatic sign-in so the machine recovers from reboots unattended
+- **TeamViewer watchdog** — monitors the TeamViewer process and restarts it if it stops
+- **Compliance watchdog** — periodically verifies all settings and auto-remediates drift
+- **Auto-updates** — checks GitHub releases every 24 hours and applies in-place EXE updates
+- **Full restore** — backs up original settings before setup; one-click rollback to undo everything
+- **Auto light/dark theme** — follows your Windows appearance preference with live switching
+- **Windows 10 & 11 support** — Home, Pro, Enterprise, and Education editions
 
-## Requirements
+## Quick Start
 
-- Windows 10 (build 19041+) or Windows 11 (Home, Pro, Enterprise, or Education)
-- Administrator rights for setup/configuration
-- TeamViewer installed
+1. Download `KeepAliveService.exe` from the [latest release](https://github.com/SamWylde/windows-keep-alive/releases/latest)
+2. Double-click the EXE — it will request administrator privileges
+3. Go to the **Setup** tab, enter your credentials, and click **Run Setup**
+4. Reboot once to verify auto-login works
 
-Home/Core note: some settings in `HKLM\SOFTWARE\Policies\...` can be present in the registry but not enforced identically to Pro/Enterprise policy behavior. The app now warns when this applies.
+That's it. The app self-installs to `C:\Program Files\WindowsKeepAlive\`, creates a desktop shortcut, registers the background service, and sets up a startup task so the GUI launches minimized to the system tray on login.
 
-The GUI title bar shows the installed app version (for example, `Windows Keep Alive v1.2.1`).
+## GUI
 
-## Quick Start (GUI, recommended)
+The app has four tabs:
 
-1. Publish a single EXE:
-   ```powershell
-   dotnet publish src/KeepAliveService/KeepAliveService.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
-   ```
-2. Double-click `publish\KeepAliveService.exe`.
-3. Accept UAC elevation.
-4. In the `Setup` tab, enter credentials and click `Run Setup`.
-5. Reboot once to validate auto-login behavior.
+| Tab | What it does |
+|-----|-------------|
+| **Setup** | Run/re-run setup, test credentials, update auto-login password, uninstall, view live output |
+| **Status** | Service status, compliance check results, start/stop/restart controls |
+| **Updates** | Current vs. latest version, release notes, one-click update |
+| **Logs** | Live view of `app.log` |
 
-On first launch, the app copies itself to `C:\Program Files\WindowsKeepAlive\` and relaunches from there so service registration and updates use a stable canonical path.
-It also creates a desktop shortcut named `Windows Keep Alive`.
+Credentials are persisted between launches. Passwords are encrypted with Windows DPAPI.
 
-## GUI Tabs
+## What Setup Configures
 
-- `Setup`: run full setup, test credentials, update autologin password, uninstall service, view/copy live output
-- `Status`: service status + compliance check + start/stop/restart service controls
-- `Updates`: current/latest version, release notes, update apply
-- `Logs`: view `C:\ProgramData\WindowsKeepAlive\app.log`
+| Category | Settings |
+|----------|----------|
+| **Power** | Disable sleep, hibernate, and display timeout on AC and battery |
+| **Auto-login** | Enable `AutoAdminLogon`, set credentials via Sysinternals Autologon |
+| **Windows Update** | Schedule active hours, defer restarts, suppress forced reboots |
+| **Network** | Disable Wi-Fi power saving and adapter sleep |
+| **Lock screen** | Remove legal notice banners, disable lock on resume |
+| **Service** | Install and start the `KeepAliveService` background service |
+| **Startup task** | Scheduled task to launch the GUI on user login |
 
-Setup input fields are persisted between launches (username/account/domain/password).  
-Password is stored encrypted with Windows DPAPI.
+All original settings are backed up before any changes are made. Run **Restore** to undo everything.
 
-Credential testing and setup now adapt to Windows Hello/passwordless policy state:
-- If password sign-in appears blocked by policy, setup stops with remediation guidance.
-- If policy state is partially unreadable, setup warns and continues with validation.
+## Background Service
 
-## Auto Update
+The service runs three workers:
 
-- Checks GitHub releases at startup and every 24 hours
-- Uses `https://api.github.com/repos/SamWylde/windows-keep-alive/releases/latest`
-- Prefers `KeepAliveService.exe` release asset (fallback: first `.exe`)
-- `Update Now` shows download progress, then downloads to temp, stops service, replaces EXE, restarts service, relaunches app
-- Rollback path restores `.bak` if replacement fails
+| Worker | Interval | Purpose |
+|--------|----------|---------|
+| **PowerKeepAlive** | 30 sec | Calls `SetThreadExecutionState` to prevent sleep |
+| **ProcessWatchdog** | 60 sec | Checks if TeamViewer is running, restarts if not |
+| **ComplianceWatchdog** | 6 hrs | Verifies settings haven't drifted, auto-remediates |
 
-## CLI (backward compatible)
+## CLI
 
-You can still run commands from terminal:
+All operations are also available from the command line:
 
-```powershell
-KeepAliveService.exe --setup
-KeepAliveService.exe --check
-KeepAliveService.exe --update-password
-KeepAliveService.exe --uninstall
-KeepAliveService.exe --help
+```
+KeepAliveService.exe --setup             Run first-time setup (as Admin)
+KeepAliveService.exe --check             Verify all settings are compliant
+KeepAliveService.exe --update-password   Update the auto-login password
+KeepAliveService.exe --restore           Restore original settings and uninstall
+KeepAliveService.exe --uninstall         Remove the service only
+KeepAliveService.exe --tray-startup      Launch GUI minimized to system tray
+KeepAliveService.exe --help              Show help
 ```
 
-When no arguments are provided:
-
-- Interactive session: launches WinForms GUI
-- Service Control Manager session: runs as service host
+When run without arguments: interactive session opens the GUI, Service Control Manager session runs the background service.
 
 ## Data Locations
 
-```text
-C:\Program Files\WindowsKeepAlive\KeepAliveService.exe
-C:\ProgramData\WindowsKeepAlive\settings.json
-C:\ProgramData\WindowsKeepAlive\app.log
-C:\ProgramData\WindowsKeepAlive\tools\Autologon64.exe
+```
+C:\Program Files\WindowsKeepAlive\KeepAliveService.exe    Application
+C:\ProgramData\WindowsKeepAlive\settings.json             App state & backup
+C:\ProgramData\WindowsKeepAlive\app.log                   Log file (5 MB max, auto-rotated)
+C:\ProgramData\WindowsKeepAlive\tools\Autologon64.exe     Sysinternals Autologon
 ```
 
-## Build
+## Requirements
+
+- Windows 10 (build 19041+) or Windows 11
+- Administrator privileges
+- TeamViewer installed
+
+> **Note:** On Home/Core editions, some Group Policy registry keys can be written but may not be enforced the same way as on Pro/Enterprise. The app warns when this applies.
+
+## Building from Source
 
 ```powershell
+# Build
 dotnet build src/KeepAliveService/KeepAliveService.csproj
+
+# Publish single-file EXE
+dotnet publish src/KeepAliveService/KeepAliveService.csproj `
+    -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -o publish
 ```
+
+Requires [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
