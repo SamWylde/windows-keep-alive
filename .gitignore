@@ -26,6 +26,12 @@ x86/
 ## Tools downloaded during setup
 **/tools/Autologon*.exe
 
+## Publish outputs
+publish-single*/
+release-notes-*.txt
+*.sln
+nul
+
 ## OS files
 Thumbs.db
 ehthumbs.db

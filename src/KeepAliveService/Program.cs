@@ -6,6 +6,8 @@ using KeepAliveService.Services;
 using KeepAliveService.Setup;
 using KeepAliveService.UI;
 using KeepAliveService.Update;
+using Wpf.Ui.Appearance;
+using Wpf.Ui.Markup;
 
 internal static class Program
 {
@@ -112,19 +114,22 @@ internal static class Program
                 return 0;
             }
 
-            ApplicationConfiguration.Initialize();
-            var form = new MainForm(startMinimized);
-            StartActivationListener(form, out activationEvent, out activationListenerCts, out activationListenerTask);
-            Application.Run(form);
+            var app = new System.Windows.Application();
+            app.Resources.MergedDictionaries.Add(new ThemesDictionary { Theme = ApplicationTheme.Light });
+            app.Resources.MergedDictionaries.Add(new ControlsDictionary());
+
+            var window = new MainWindow(startMinimized);
+            StartActivationListener(window, out activationEvent, out activationListenerCts, out activationListenerTask);
+            app.Run(window);
             return 0;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            System.Windows.MessageBox.Show(
                 $"Application startup failed: {ex.Message}",
                 "Windows Keep Alive",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
             return 1;
         }
         finally
@@ -196,7 +201,7 @@ internal static class Program
     }
 
     private static void StartActivationListener(
-        MainForm form,
+        MainWindow window,
         out EventWaitHandle? activationEvent,
         out CancellationTokenSource? listenerCts,
         out Task? listenerTask)
@@ -226,7 +231,7 @@ internal static class Program
                         return;
                     }
 
-                    form.ActivateFromExternalLaunch();
+                    window.ActivateFromExternalLaunch();
                 }
             }, token);
         }
