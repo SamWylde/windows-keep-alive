@@ -39,7 +39,30 @@ public static class InstallManager
         }
 
         Directory.CreateDirectory(CanonicalInstallDirectory);
-        File.Copy(currentPath, CanonicalExePath, overwrite: true);
+        try
+        {
+            File.Copy(currentPath, CanonicalExePath, overwrite: true);
+        }
+        catch (IOException)
+        {
+            // The exe may be locked by the running service. Stop it and retry.
+            try
+            {
+                using var sc = new System.ServiceProcess.ServiceController("KeepAliveService");
+                if (sc.Status != System.ServiceProcess.ServiceControllerStatus.Stopped)
+                {
+                    sc.Stop();
+                    sc.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10));
+                }
+            }
+            catch
+            {
+                // Service may not be installed yet.
+            }
+
+            Thread.Sleep(500);
+            File.Copy(currentPath, CanonicalExePath, overwrite: true);
+        }
         EnsureDesktopShortcut();
 
         var psi = new ProcessStartInfo
