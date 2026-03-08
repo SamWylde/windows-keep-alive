@@ -45,6 +45,7 @@ public static class InstallManager
         var psi = new ProcessStartInfo
         {
             FileName = CanonicalExePath,
+            Verb = "runas",
             UseShellExecute = true,
             WorkingDirectory = CanonicalInstallDirectory,
         };
