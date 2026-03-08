@@ -40,6 +40,10 @@ public static class RestoreManager
     // RESTORE (reverts all changes)
     // ========================
 
+    /// <summary>
+    /// Restores all Windows settings to their original values, stops/removes the service
+    /// and startup task, but leaves the program installed (EXE + desktop shortcut remain).
+    /// </summary>
     public static int RunRestore()
     {
         _failures = 0;
@@ -77,14 +81,10 @@ public static class RestoreManager
         // Step 6: Remove startup scheduled task
         TryRun("Remove startup task", StartupTaskManager.RemoveTask);
 
-        // Step 7: Remove desktop shortcut
-        TryRun("Remove desktop shortcut", () =>
-        {
-            InstallManager.RemoveDesktopShortcut();
-            return true; // void method, best-effort
-        });
+        // Note: Desktop shortcut and installed EXE are intentionally kept.
+        // The user can re-run setup later without re-downloading.
 
-        // Step 8: Clear setup state (only if all previous steps succeeded,
+        // Step 7: Clear setup state (only if all previous steps succeeded,
         // so backup is preserved for retry on partial failure)
         if (_failures == 0)
         {
@@ -101,8 +101,92 @@ public static class RestoreManager
             ConsoleOutput.Warning("Skipping setup state cleanup: some steps failed. Backup preserved for retry.");
         }
 
-        PrintSummary();
+        PrintRestoreSummary();
         return _failures > 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Removes everything: service, startup task, desktop shortcut, installed EXE,
+    /// and program data. This is the full uninstall.
+    /// </summary>
+    public static int RunUninstall()
+    {
+        _failures = 0;
+
+        Console.WriteLine();
+        Console.WriteLine("========================================");
+        Console.WriteLine("  Windows Keep Alive - Full Uninstall");
+        Console.WriteLine("========================================");
+
+        var settings = AppSettings.Load();
+        var backup = settings.OriginalSettingsBackup;
+        var hasBackup = backup is { Count: > 0 };
+
+        // If settings were never restored, restore them first
+        if (hasBackup || settings.SetupCompletedUtc != null)
+        {
+            ConsoleOutput.Info("Restoring Windows settings before uninstall...");
+            if (!hasBackup)
+            {
+                ConsoleOutput.Warning("No original settings backup found. Will use Windows defaults where possible.");
+                backup = new Dictionary<string, string>();
+            }
+
+            TryRun("Stop KeepAlive service", StopService);
+            TryRun("Remove KeepAlive service", RemoveService);
+            TryRun("Restore power settings", () => RestorePowerSettings(backup!));
+            TryRun("Restore registry settings", () => RestoreRegistrySettings(backup!));
+            TryRun("Restore network adapter settings", () => RestoreNetworkSettings(backup!));
+            TryRun("Remove startup task", StartupTaskManager.RemoveTask);
+        }
+        else
+        {
+            // No setup state, but still clean up service/task in case they exist
+            TryRun("Stop KeepAlive service", StopService);
+            TryRun("Remove KeepAlive service", RemoveService);
+            TryRun("Remove startup task", StartupTaskManager.RemoveTask);
+        }
+
+        // Remove desktop shortcut
+        TryRun("Remove desktop shortcut", () =>
+        {
+            InstallManager.RemoveDesktopShortcut();
+            return true;
+        });
+
+        // Remove installed EXE and program directory
+        TryRun("Remove installed program files", () =>
+        {
+            InstallManager.RemoveInstalledFiles();
+            return true;
+        });
+
+        // Remove program data (settings, logs, tools)
+        TryRun("Remove program data", () =>
+        {
+            RemoveProgramData();
+            return true;
+        });
+
+        PrintUninstallSummary();
+        return _failures > 0 ? 1 : 0;
+    }
+
+    private static void RemoveProgramData()
+    {
+        var programDataDir = AppSettings.ProgramDataDirectory;
+        if (Directory.Exists(programDataDir))
+        {
+            try
+            {
+                Directory.Delete(programDataDir, recursive: true);
+                ConsoleOutput.Success($"Removed {programDataDir}");
+            }
+            catch (Exception ex)
+            {
+                ConsoleOutput.Warning($"Could not fully remove {programDataDir}: {ex.Message}");
+            }
+        }
     }
 
     // =====================
@@ -741,7 +825,7 @@ public static class RestoreManager
         return int.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber, null, out result);
     }
 
-    private static void PrintSummary()
+    private static void PrintRestoreSummary()
     {
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -763,6 +847,38 @@ public static class RestoreManager
             Console.WriteLine("========================================");
             Console.WriteLine();
             Console.WriteLine("  All Windows settings have been reverted.");
+            Console.WriteLine("  The program is still installed — you can re-run setup at any time.");
+        }
+
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("  IMPORTANT: Restart your PC for all changes to take full effect.");
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private static void PrintUninstallSummary()
+    {
+        Console.WriteLine();
+        Console.WriteLine("========================================");
+
+        if (_failures > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Uninstall completed with {_failures} failure(s)");
+            Console.ResetColor();
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+            Console.WriteLine("  Some steps failed. Review the output above.");
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("  Uninstall Complete!");
+            Console.ResetColor();
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+            Console.WriteLine("  All settings restored and program removed.");
         }
 
         Console.WriteLine();

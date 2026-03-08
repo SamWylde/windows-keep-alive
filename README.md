@@ -33,7 +33,7 @@ The app has four tabs:
 
 | Tab | What it does |
 |-----|-------------|
-| **Setup** | Run/re-run setup, test credentials, update auto-login password, uninstall, view live output |
+| **Setup** | Run/re-run setup, test credentials, update auto-login password, restore, uninstall, view live output |
 | **Status** | Service status, compliance check results, start/stop/restart controls |
 | **Updates** | Current vs. latest version, release notes, one-click update |
 | **Logs** | Live view of `app.log` |
@@ -80,8 +80,8 @@ All operations are also available from the command line:
 KeepAliveService.exe --setup             Run first-time setup (as Admin)
 KeepAliveService.exe --check             Verify all settings are compliant
 KeepAliveService.exe --update-password   Update the auto-login password
-KeepAliveService.exe --restore           Restore original settings and uninstall
-KeepAliveService.exe --uninstall         Remove the service only
+KeepAliveService.exe --restore           Restore original settings (keeps program installed)
+KeepAliveService.exe --uninstall         Full uninstall (restore settings + remove program)
 KeepAliveService.exe --tray-startup      Launch GUI minimized to system tray
 KeepAliveService.exe --help              Show help
 ```

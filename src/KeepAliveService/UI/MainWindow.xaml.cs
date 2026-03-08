@@ -169,7 +169,8 @@ public sealed partial class MainWindow : FluentWindow
     private async void RunSetup_Click(object sender, RoutedEventArgs e) => await RunSetupAsync();
     private async void TestCredentials_Click(object sender, RoutedEventArgs e) => await TestCredentialsAsync();
     private async void UpdatePassword_Click(object sender, RoutedEventArgs e) => await UpdatePasswordAsync();
-    private async void RestoreUninstall_Click(object sender, RoutedEventArgs e) => await RestoreAndUninstallAsync();
+    private async void Restore_Click(object sender, RoutedEventArgs e) => await RestoreAsync();
+    private async void Uninstall_Click(object sender, RoutedEventArgs e) => await UninstallAsync();
 
     private async Task RunSetupAsync()
     {
@@ -277,28 +278,55 @@ public sealed partial class MainWindow : FluentWindow
             });
     }
 
-    private async Task RestoreAndUninstallAsync()
+    private async Task RestoreAsync()
     {
         var confirm = MessageBox.Show(this,
             "This will:\n" +
             "  - Stop and remove the KeepAlive service\n" +
             "  - Restore all Windows settings to their original values\n" +
-            "  - Remove the startup task and desktop shortcut\n\n" +
+            "  - Remove the startup task\n\n" +
+            "The program will remain installed so you can re-run setup later.\n" +
             "A reboot will be needed for all changes to take effect.\n\nContinue?",
-            "Confirm Restore & Uninstall",
+            "Confirm Restore",
             MessageBoxButton.YesNo, MessageBoxImage.Question);
 
         if (confirm != MessageBoxResult.Yes)
             return;
 
         await RunOperationAsync(
-            "Restoring settings and uninstalling",
+            "Restoring settings",
             async () =>
             {
                 var exitCode = await Task.Run(RestoreManager.RunRestore);
                 Console.WriteLine(exitCode == 0
-                    ? "[OK] Restore and uninstall completed successfully."
+                    ? "[OK] Settings restored. The program is still installed — you can re-run setup at any time."
                     : "[WARN] Restore completed with some failures. Check output above.");
+            });
+    }
+
+    private async Task UninstallAsync()
+    {
+        var confirm = MessageBox.Show(this,
+            "This will:\n" +
+            "  - Stop and remove the KeepAlive service\n" +
+            "  - Restore all Windows settings to their original values\n" +
+            "  - Remove the startup task, desktop shortcut, and program files\n\n" +
+            "The program will be completely removed from this machine.\n" +
+            "A reboot will be needed for all changes to take effect.\n\nContinue?",
+            "Confirm Uninstall",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (confirm != MessageBoxResult.Yes)
+            return;
+
+        await RunOperationAsync(
+            "Uninstalling",
+            async () =>
+            {
+                var exitCode = await Task.Run(RestoreManager.RunUninstall);
+                Console.WriteLine(exitCode == 0
+                    ? "[OK] Uninstall completed. You can close this window."
+                    : "[WARN] Uninstall completed with some failures. Check output above.");
             });
     }
 
@@ -1076,6 +1104,7 @@ public sealed partial class MainWindow : FluentWindow
         RunSetupButton.IsEnabled = enabled;
         TestCredentialsButton.IsEnabled = enabled;
         UpdatePasswordButton.IsEnabled = enabled;
+        RestoreButton.IsEnabled = enabled;
         UninstallButton.IsEnabled = enabled;
         RunCheckButton.IsEnabled = enabled;
         CheckUpdatesButton.IsEnabled = enabled;

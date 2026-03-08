@@ -63,8 +63,7 @@ internal static class Program
                     return 1;
                 }
 
-                ServiceInstaller.Uninstall();
-                return 0;
+                return RestoreManager.RunUninstall();
 
             case "--restore":
                 if (!RequireAdmin("--restore"))
@@ -353,8 +352,8 @@ internal static class Program
         Console.WriteLine("  KeepAliveService.exe --setup             First-time setup (run as Admin)");
         Console.WriteLine("  KeepAliveService.exe --check             Verify all settings are correct");
         Console.WriteLine("  KeepAliveService.exe --update-password   Update auto-login password");
-        Console.WriteLine("  KeepAliveService.exe --restore           Restore original settings and uninstall");
-        Console.WriteLine("  KeepAliveService.exe --uninstall         Remove the service only");
+        Console.WriteLine("  KeepAliveService.exe --restore           Restore original settings (keeps program installed)");
+        Console.WriteLine("  KeepAliveService.exe --uninstall         Full uninstall (restore settings + remove program)");
         Console.WriteLine("  KeepAliveService.exe --tray-startup      Launch GUI minimized to system tray");
         Console.WriteLine("  KeepAliveService.exe --help              Show this help");
         Console.WriteLine();

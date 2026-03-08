@@ -145,6 +145,37 @@ public static class InstallManager
             StringComparison.OrdinalIgnoreCase);
     }
 
+    public static void RemoveInstalledFiles()
+    {
+        var installDir = CanonicalInstallDirectory;
+        if (!Directory.Exists(installDir)) return;
+
+        // Delete the EXE first. If we're running from the canonical path,
+        // the OS will keep it locked until process exit — best effort.
+        try
+        {
+            var exePath = CanonicalExePath;
+            if (File.Exists(exePath))
+                File.Delete(exePath);
+        }
+        catch
+        {
+            // May be locked by the running process — will be cleaned up on next boot.
+        }
+
+        // Try to remove the directory. If the EXE is locked, this will fail
+        // but that's acceptable — the directory will be mostly empty.
+        try
+        {
+            if (Directory.Exists(installDir))
+                Directory.Delete(installDir, recursive: true);
+        }
+        catch
+        {
+            // Best effort — directory may contain the running EXE.
+        }
+    }
+
     public static void RemoveDesktopShortcut()
     {
         // Remove from both public and per-user desktops (older installs used per-user).
