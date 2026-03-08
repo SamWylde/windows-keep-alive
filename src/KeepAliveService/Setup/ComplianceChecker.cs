@@ -6,12 +6,12 @@ namespace KeepAliveService.Setup;
 
 public static class ComplianceChecker
 {
-    private static int _passCount;
-    private static int _failCount;
-    private static int _warnCount;
-    private static bool _isHomeOrCore;
-    private static bool _isWindows10;
-    private static bool _isWindows11;
+    [ThreadStatic] private static int _passCount;
+    [ThreadStatic] private static int _failCount;
+    [ThreadStatic] private static int _warnCount;
+    [ThreadStatic] private static bool _isHomeOrCore;
+    [ThreadStatic] private static bool _isWindows10;
+    [ThreadStatic] private static bool _isWindows11;
 
     public static int RunCheck(bool includeStartupTask = true)
     {
@@ -360,30 +360,11 @@ public static class ComplianceChecker
             process?.WaitForExit(10_000);
 
             var expectedHex = $"0x{expectedValue:x8}";
-            var lines = output.Split('\n');
-            var acFound = false;
-            var dcFound = false;
-            var acOk = false;
-            var dcOk = false;
-            string? acValue = null;
-            string? dcValue = null;
-
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Contains("Current AC Power Setting Index", StringComparison.OrdinalIgnoreCase))
-                {
-                    acFound = true;
-                    acOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
-                    if (!acOk) acValue = trimmed;
-                }
-                else if (trimmed.Contains("Current DC Power Setting Index", StringComparison.OrdinalIgnoreCase))
-                {
-                    dcFound = true;
-                    dcOk = trimmed.Contains(expectedHex, StringComparison.OrdinalIgnoreCase);
-                    if (!dcOk) dcValue = trimmed;
-                }
-            }
+            var (acHex, dcHex) = Helpers.ParsePowerCfgSettingValues(output);
+            var acFound = acHex != null;
+            var dcFound = dcHex != null;
+            var acOk = acFound && acHex!.Equals(expectedHex, StringComparison.OrdinalIgnoreCase);
+            var dcOk = dcFound && dcHex!.Equals(expectedHex, StringComparison.OrdinalIgnoreCase);
 
             if (acOk && dcOk)
                 Pass($"{name}: {friendlyValue} (AC and DC)");
@@ -394,7 +375,7 @@ public static class ComplianceChecker
             else if (dcOk && !acFound)
                 Warn($"{name}: {friendlyValue} on DC; AC not reported by powercfg");
             else
-                Fail($"{name}: not set to {friendlyValue} (AC={acValue ?? "not found"}, DC={dcValue ?? "not found"})");
+                Fail($"{name}: not set to {friendlyValue} (AC={acHex ?? "not found"}, DC={dcHex ?? "not found"})");
         }
         catch
         {
@@ -511,18 +492,7 @@ public static class ComplianceChecker
                 var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
                 var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
 
-                var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
-
-                if (isVirtual)
+                if (NetworkConfigurator.IsVirtualAdapter(driverDesc, componentId))
                 {
                     continue;
                 }
@@ -530,13 +500,13 @@ public static class ComplianceChecker
                 adaptersFound++;
                 var adapterName = string.IsNullOrWhiteSpace(driverDesc) ? subKeyName : driverDesc;
                 var pnpCapabilities = adapterKey.GetValue("PnPCapabilities");
-                if (pnpCapabilities is int pnpValue && pnpValue == 24)
+                if (pnpCapabilities is int pnpValue && (pnpValue & 0x18) == 0x18)
                 {
                     Pass($"Network adapter power management disabled: {adapterName}");
                 }
                 else
                 {
-                    Fail($"Network adapter power management not disabled: {adapterName} (PnPCapabilities={pnpCapabilities ?? "(not set)"}, expected 24)");
+                    Fail($"Network adapter power management not disabled: {adapterName} (PnPCapabilities={pnpCapabilities ?? "(not set)"}, expected bits 0x18 set)");
                 }
             }
 
@@ -587,9 +557,14 @@ public static class ComplianceChecker
         Console.WriteLine();
         Console.WriteLine("--- Startup Task ---");
 
-        if (StartupTaskManager.IsTaskPresent())
+        var (exists, correct, detail) = StartupTaskManager.ValidateTask();
+        if (exists && correct)
         {
-            Pass("Startup task present (GUI auto-start at logon)");
+            Pass("Startup task present and correctly configured");
+        }
+        else if (exists)
+        {
+            Fail($"Startup task exists but misconfigured: {detail}");
         }
         else
         {

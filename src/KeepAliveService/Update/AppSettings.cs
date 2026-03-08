@@ -7,6 +7,7 @@ namespace KeepAliveService.Update;
 public sealed class AppSettings
 {
     private static readonly byte[] PasswordEntropy = Encoding.UTF8.GetBytes("WindowsKeepAlive.CredentialEntropy.v1");
+    private static readonly Mutex SaveMutex = new(false, @"Global\WindowsKeepAlive.Settings.Mutex");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -76,6 +77,18 @@ public sealed class AppSettings
         }
         catch
         {
+            // Preserve corrupt file for diagnostics so backup metadata is not silently lost.
+            try
+            {
+                var corruptPath = SettingsPath + ".corrupt";
+                if (File.Exists(SettingsPath) && !File.Exists(corruptPath))
+                    File.Copy(SettingsPath, corruptPath);
+            }
+            catch
+            {
+                // Best effort only.
+            }
+
             return new AppSettings();
         }
     }
@@ -85,30 +98,58 @@ public sealed class AppSettings
         EnsureDirectories();
         UpdateCheckIntervalHours = NormalizeInterval(UpdateCheckIntervalHours);
 
-        // Preserve fields that may have been written by another process (e.g. setup
-        // writes OriginalSettingsBackup and SetupCompletedUtc while the GUI holds a
-        // stale in-memory instance). Without this, a GUI credential save would erase
-        // the backup data written by setup.
-        if (File.Exists(SettingsPath))
+        var acquired = false;
+        try
         {
-            try
-            {
-                var existing = JsonSerializer.Deserialize<AppSettings>(
-                    File.ReadAllText(SettingsPath), JsonOptions);
-                if (existing != null)
-                {
-                    OriginalSettingsBackup ??= existing.OriginalSettingsBackup;
-                    SetupCompletedUtc ??= existing.SetupCompletedUtc;
-                }
-            }
-            catch
-            {
-                // Best effort — proceed with current values.
-            }
+            acquired = SaveMutex.WaitOne(5000);
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
         }
 
-        var json = JsonSerializer.Serialize(this, JsonOptions);
-        File.WriteAllText(SettingsPath, json);
+        if (!acquired)
+        {
+            // Another process holds the lock for too long; skip write to avoid data corruption.
+            return;
+        }
+
+        try
+        {
+            // Preserve fields that may have been written by another process (e.g. setup
+            // writes OriginalSettingsBackup and SetupCompletedUtc while the GUI holds a
+            // stale in-memory instance). Without this, a GUI credential save would erase
+            // the backup data written by setup.
+            if (File.Exists(SettingsPath))
+            {
+                try
+                {
+                    var existing = JsonSerializer.Deserialize<AppSettings>(
+                        File.ReadAllText(SettingsPath), JsonOptions);
+                    if (existing != null)
+                    {
+                        OriginalSettingsBackup ??= existing.OriginalSettingsBackup;
+                        SetupCompletedUtc ??= existing.SetupCompletedUtc;
+                    }
+                }
+                catch
+                {
+                    // Best effort — proceed with current values.
+                }
+            }
+
+            var json = JsonSerializer.Serialize(this, JsonOptions);
+            var tempPath = SettingsPath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, SettingsPath, overwrite: true);
+        }
+        finally
+        {
+            if (acquired)
+            {
+                SaveMutex.ReleaseMutex();
+            }
+        }
     }
 
     public void SetSavedPassword(string? password)
@@ -120,7 +161,7 @@ public sealed class AppSettings
         }
 
         var bytes = Encoding.UTF8.GetBytes(password);
-        var protectedBytes = ProtectedData.Protect(bytes, PasswordEntropy, DataProtectionScope.LocalMachine);
+        var protectedBytes = ProtectedData.Protect(bytes, PasswordEntropy, DataProtectionScope.CurrentUser);
         SavedPasswordEncrypted = Convert.ToBase64String(protectedBytes);
     }
 
@@ -134,7 +175,7 @@ public sealed class AppSettings
         try
         {
             var bytes = Convert.FromBase64String(SavedPasswordEncrypted);
-            var plain = ProtectedData.Unprotect(bytes, PasswordEntropy, DataProtectionScope.LocalMachine);
+            var plain = ProtectedData.Unprotect(bytes, PasswordEntropy, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plain);
         }
         catch

@@ -13,7 +13,7 @@ public static class AutoLogonConfigurator
     private const string SystemPolicyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
     private const string DesktopPolicyPath = @"SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop";
 
-    private static int _failures;
+    [ThreadStatic] private static int _failures;
 
     public static bool Configure()
     {
@@ -76,8 +76,8 @@ public static class AutoLogonConfigurator
             return;
         }
 
-        WriteWarning("Windows Home/Core detected: policy-based lock-screen and screen-saver settings may not be fully enforced.");
-        WriteWarning("Auto-logon still depends on runtime behavior after reboot; verify with --check or the Status tab.");
+        ConsoleOutput.Warning("Windows Home/Core detected: policy-based lock-screen and screen-saver settings may not be fully enforced.");
+        ConsoleOutput.Warning("Auto-logon still depends on runtime behavior after reboot; verify with --check or the Status tab.");
     }
 
     /// <summary>
@@ -114,16 +114,16 @@ public static class AutoLogonConfigurator
             using var key = Registry.LocalMachine.OpenSubKey(PasswordlessPath, writable: true);
             if (key == null)
             {
-                WriteInfo("Windows Hello passwordless requirement key not present; skipping (not applicable on this build/edition).");
+                ConsoleOutput.Info("Windows Hello passwordless requirement key not present; skipping (not applicable on this build/edition).");
                 return;
             }
 
             key.SetValue("DevicePasswordLessBuildVersion", 0, RegistryValueKind.DWord);
-            WriteSuccess("Windows Hello passwordless requirement -> Disabled");
+            ConsoleOutput.Success("Windows Hello passwordless requirement -> Disabled");
         }
         catch (Exception ex)
         {
-            WriteWarning($"Disable Windows Hello requirement - {ex.Message} (continuing)");
+            ConsoleOutput.Warning($"Disable Windows Hello requirement - {ex.Message} (continuing)");
             if (WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out _) && info?.IsWindows11 == true)
             {
                 _failures++;
@@ -139,11 +139,11 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(SystemPolicyPath, writable: true);
             key?.SetValue("DisableAutomaticRestartSignOn", 0, RegistryValueKind.DWord);
-            WriteSuccess("ARSO (Automatic Restart Sign-On) -> Enabled");
+            ConsoleOutput.Success("ARSO (Automatic Restart Sign-On) -> Enabled");
         }
         catch (Exception ex)
         {
-            WriteError($"Enable ARSO - {ex.Message}");
+            ConsoleOutput.Error($"Enable ARSO - {ex.Message}");
             _failures++;
         }
     }
@@ -155,11 +155,11 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(PersonalizationPath, writable: true);
             key?.SetValue("NoLockScreen", 1, RegistryValueKind.DWord);
-            WriteSuccess("Lock screen -> Disabled");
+            ConsoleOutput.Success("Lock screen -> Disabled");
         }
         catch (Exception ex)
         {
-            WriteError($"Disable lock screen - {ex.Message}");
+            ConsoleOutput.Error($"Disable lock screen - {ex.Message}");
             _failures++;
         }
 
@@ -168,11 +168,11 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
             key?.SetValue("DisableLockWorkstation", 1, RegistryValueKind.DWord);
-            WriteSuccess("Workstation lock -> Disabled");
+            ConsoleOutput.Success("Workstation lock -> Disabled");
         }
         catch (Exception ex)
         {
-            WriteError($"Disable workstation lock - {ex.Message}");
+            ConsoleOutput.Error($"Disable workstation lock - {ex.Message}");
             _failures++;
         }
 
@@ -184,7 +184,7 @@ public static class AutoLogonConfigurator
             using var key = Registry.LocalMachine.CreateSubKey(DesktopPolicyPath, writable: true);
             if (key == null)
             {
-                WriteWarning("Disable screen saver policy - Could not create/open registry key");
+                ConsoleOutput.Warning("Disable screen saver policy - Could not create/open registry key");
                 return;
             }
 
@@ -192,12 +192,12 @@ public static class AutoLogonConfigurator
             key.SetValue("ScreenSaveActive", "0", RegistryValueKind.String);
             key.SetValue("ScreenSaveTimeOut", "0", RegistryValueKind.String);
             key.SetValue("SCRNSAVE.EXE", string.Empty, RegistryValueKind.String);
-            WriteSuccess("Screen saver -> Disabled (machine policy)");
-            WriteSuccess("Screen saver password -> Disabled (machine policy)");
+            ConsoleOutput.Success("Screen saver -> Disabled (machine policy)");
+            ConsoleOutput.Success("Screen saver password -> Disabled (machine policy)");
         }
         catch (Exception ex)
         {
-            WriteWarning($"Disable screen saver password - {ex.Message}");
+            ConsoleOutput.Warning($"Disable screen saver password - {ex.Message}");
         }
     }
 
@@ -207,7 +207,7 @@ public static class AutoLogonConfigurator
         var autologonPath = DownloadAutologon();
         if (autologonPath == null)
         {
-            WriteError("Cannot proceed without Autologon64.exe");
+            ConsoleOutput.Error("Cannot proceed without Autologon64.exe");
             _failures++;
             return;
         }
@@ -222,7 +222,7 @@ public static class AutoLogonConfigurator
         var username = credentials.Username.Trim();
         if (string.IsNullOrWhiteSpace(username))
         {
-            WriteError("Username cannot be empty");
+            ConsoleOutput.Error("Username cannot be empty");
             _failures++;
             return;
         }
@@ -230,7 +230,7 @@ public static class AutoLogonConfigurator
         var password = credentials.Password;
         if (string.IsNullOrWhiteSpace(password))
         {
-            WriteError("Password cannot be empty");
+            ConsoleOutput.Error("Password cannot be empty");
             _failures++;
             return;
         }
@@ -238,7 +238,7 @@ public static class AutoLogonConfigurator
         var domain = credentials.ResolveDomain();
         if (string.IsNullOrWhiteSpace(domain))
         {
-            WriteError("Domain could not be resolved");
+            ConsoleOutput.Error("Domain could not be resolved");
             _failures++;
             return;
         }
@@ -246,7 +246,7 @@ public static class AutoLogonConfigurator
         var readiness = SignInReadinessDetector.Assess(credentials);
         if (readiness.Status == SignInReadinessStatus.Blocked)
         {
-            WriteError(readiness.Message);
+            ConsoleOutput.Error(readiness.Message);
             foreach (var step in readiness.RemediationSteps)
             {
                 Console.WriteLine($"    - {step}");
@@ -258,28 +258,28 @@ public static class AutoLogonConfigurator
 
         if (readiness.Status == SignInReadinessStatus.Warning)
         {
-            WriteWarning(readiness.Message);
+            ConsoleOutput.Warning(readiness.Message);
         }
         else
         {
-            WriteSuccess(readiness.Message);
+            ConsoleOutput.Success(readiness.Message);
         }
 
         var credentialCheck = CredentialValidator.Validate(credentials);
         if (credentialCheck.Status == CredentialValidationStatus.Invalid)
         {
-            WriteError(credentialCheck.Message);
+            ConsoleOutput.Error(credentialCheck.Message);
             _failures++;
             return;
         }
 
         if (credentialCheck.Status == CredentialValidationStatus.Warning)
         {
-            WriteWarning(credentialCheck.Message);
+            ConsoleOutput.Warning(credentialCheck.Message);
         }
         else
         {
-            WriteSuccess("Credential validation passed");
+            ConsoleOutput.Success("Credential validation passed");
         }
 
         Console.WriteLine($"  Using domain: {domain}");
@@ -310,7 +310,7 @@ public static class AutoLogonConfigurator
         var username = Console.ReadLine()?.Trim();
         if (string.IsNullOrWhiteSpace(username))
         {
-            WriteError("Username cannot be empty");
+            ConsoleOutput.Error("Username cannot be empty");
             _failures++;
             return null;
         }
@@ -333,7 +333,7 @@ public static class AutoLogonConfigurator
 
         if (accountType == null)
         {
-            WriteError("Invalid selection. Please enter 1, 2, or 3.");
+            ConsoleOutput.Error("Invalid selection. Please enter 1, 2, or 3.");
             _failures++;
             return null;
         }
@@ -362,7 +362,7 @@ public static class AutoLogonConfigurator
 
         if (string.IsNullOrWhiteSpace(password))
         {
-            WriteError("Password cannot be empty");
+            ConsoleOutput.Error("Password cannot be empty");
             _failures++;
             return null;
         }
@@ -382,11 +382,11 @@ public static class AutoLogonConfigurator
 
         if (File.Exists(autologonPath))
         {
-            WriteSuccess("Autologon64.exe already downloaded");
+            ConsoleOutput.Success("Autologon64.exe already downloaded");
             return autologonPath;
         }
 
-        WriteInfo("Downloading Autologon64.exe from Sysinternals...");
+        ConsoleOutput.Info("Downloading Autologon64.exe from Sysinternals...");
 
         try
         {
@@ -423,7 +423,7 @@ public static class AutoLogonConfigurator
                     var percent = (int)Math.Clamp(totalRead * 100L / contentLength.Value, 0L, 100L);
                     if (percent >= nextPercentReport)
                     {
-                        WriteInfo($"Autologon download: {percent}% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
+                        ConsoleOutput.Info($"Autologon download: {percent}% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
                         while (percent >= nextPercentReport)
                         {
                             nextPercentReport += 10;
@@ -432,22 +432,22 @@ public static class AutoLogonConfigurator
                 }
                 else if (totalRead >= nextByteReport)
                 {
-                    WriteInfo($"Autologon download: {FormatBytes(totalRead)}");
+                    ConsoleOutput.Info($"Autologon download: {FormatBytes(totalRead)}");
                     nextByteReport += 2L * 1024L * 1024L;
                 }
             }
 
             if (contentLength is > 0)
             {
-                WriteInfo($"Autologon download: 100% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
+                ConsoleOutput.Info($"Autologon download: 100% ({FormatBytes(totalRead)} / {FormatBytes(contentLength.Value)})");
             }
 
-            WriteSuccess("Autologon64.exe downloaded");
+            ConsoleOutput.Success("Autologon64.exe downloaded");
             return autologonPath;
         }
         catch (Exception ex)
         {
-            WriteError($"Download failed: {ex.Message}");
+            ConsoleOutput.Error($"Download failed: {ex.Message}");
             Console.WriteLine("  You can manually download Autologon64.exe from:");
             Console.WriteLine("  https://learn.microsoft.com/en-us/sysinternals/downloads/autologon");
             Console.WriteLine($"  Place it at: {autologonPath}");
@@ -479,7 +479,7 @@ public static class AutoLogonConfigurator
             using var process = Process.Start(psi);
             if (process == null)
             {
-                WriteError("Autologon64.exe signature verification failed: could not start powershell.");
+                ConsoleOutput.Error("Autologon64.exe signature verification failed: could not start powershell.");
                 return false;
             }
 
@@ -497,7 +497,7 @@ public static class AutoLogonConfigurator
                     // Best effort only.
                 }
 
-                WriteError("Autologon64.exe signature verification timed out.");
+                ConsoleOutput.Error("Autologon64.exe signature verification timed out.");
                 Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
                 try { File.Delete(filePath); } catch { }
                 return false;
@@ -508,16 +508,16 @@ public static class AutoLogonConfigurator
             var error = readsCompleted ? errorReadTask.Result.Trim() : string.Empty;
             if (!readsCompleted)
             {
-                WriteWarning("Autologon64.exe signature verification output read timed out.");
+                ConsoleOutput.Warning("Autologon64.exe signature verification output read timed out.");
             }
 
             if (process.ExitCode == 0 && output.Contains("VALID", StringComparison.OrdinalIgnoreCase))
             {
-                WriteSuccess("Autologon64.exe Authenticode signature verified (Valid, Microsoft Corporation)");
+                ConsoleOutput.Success("Autologon64.exe Authenticode signature verified (Valid, Microsoft Corporation)");
                 return true;
             }
 
-            WriteError($"Autologon64.exe signature verification failed: {output}");
+            ConsoleOutput.Error($"Autologon64.exe signature verification failed: {output}");
             if (!string.IsNullOrWhiteSpace(error))
                 Console.WriteLine($"    Error: {error}");
             Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
@@ -526,7 +526,7 @@ public static class AutoLogonConfigurator
         }
         catch (Exception ex)
         {
-            WriteError($"Autologon64.exe signature verification failed: {ex.Message}");
+            ConsoleOutput.Error($"Autologon64.exe signature verification failed: {ex.Message}");
             Console.WriteLine("    The file may be tampered with or untrusted. Deleting it.");
             try { File.Delete(filePath); } catch { }
             return false;
@@ -553,7 +553,7 @@ public static class AutoLogonConfigurator
             using var process = Process.Start(psi);
             if (process == null)
             {
-                WriteError("Failed to start Autologon64.exe.");
+                ConsoleOutput.Error("Failed to start Autologon64.exe.");
                 _failures++;
                 return;
             }
@@ -572,7 +572,7 @@ public static class AutoLogonConfigurator
                     // Best effort only.
                 }
 
-                WriteError("Autologon timed out after 30 seconds.");
+                ConsoleOutput.Error("Autologon timed out after 30 seconds.");
                 _failures++;
                 return;
             }
@@ -583,11 +583,11 @@ public static class AutoLogonConfigurator
 
             if (process.ExitCode == 0)
             {
-                WriteSuccess("Autologon configured (credentials stored encrypted as LSA secrets)");
+                ConsoleOutput.Success("Autologon configured (credentials stored encrypted as LSA secrets)");
             }
             else
             {
-                WriteError($"Autologon failed (exit code {process.ExitCode})");
+                ConsoleOutput.Error($"Autologon failed (exit code {process.ExitCode})");
                 if (!string.IsNullOrEmpty(error)) Console.WriteLine($"    Error: {error}");
                 if (!string.IsNullOrEmpty(output)) Console.WriteLine($"    Output: {output}");
 
@@ -601,7 +601,7 @@ public static class AutoLogonConfigurator
         }
         catch (Exception ex)
         {
-            WriteError($"Failed to run Autologon: {ex.Message}");
+            ConsoleOutput.Error($"Failed to run Autologon: {ex.Message}");
             _failures++;
         }
     }
@@ -616,14 +616,14 @@ public static class AutoLogonConfigurator
 
             if (autoAdminLogon != "1")
             {
-                WriteError($"Auto-login verification failed: AutoAdminLogon={autoAdminLogon ?? "(not set)"} (expected 1)");
+                ConsoleOutput.Error($"Auto-login verification failed: AutoAdminLogon={autoAdminLogon ?? "(not set)"} (expected 1)");
                 _failures++;
                 return;
             }
 
             if (string.IsNullOrEmpty(defaultUserName))
             {
-                WriteError("Auto-login verification failed: DefaultUserName is not set");
+                ConsoleOutput.Error("Auto-login verification failed: DefaultUserName is not set");
                 _failures++;
                 return;
             }
@@ -643,16 +643,16 @@ public static class AutoLogonConfigurator
 
             if (!acceptedUserNames.Contains(defaultUserName))
             {
-                WriteWarning($"Auto-login user mismatch: configured={defaultUserName}, expected one of [{string.Join(", ", acceptedUserNames)}]");
+                ConsoleOutput.Warning($"Auto-login user mismatch: configured={defaultUserName}, expected one of [{string.Join(", ", acceptedUserNames)}]");
                 _failures++;
                 return;
             }
 
-            WriteSuccess($"Auto-login verified for user: {defaultUserName}");
+            ConsoleOutput.Success($"Auto-login verified for user: {defaultUserName}");
         }
         catch (Exception ex)
         {
-            WriteWarning($"Could not verify auto-login: {ex.Message}");
+            ConsoleOutput.Warning($"Could not verify auto-login: {ex.Message}");
         }
     }
 
@@ -662,11 +662,11 @@ public static class AutoLogonConfigurator
         {
             using var key = Registry.LocalMachine.CreateSubKey(WinlogonPath, writable: true);
             key?.SetValue("ForceAutoLogon", "1", RegistryValueKind.String);
-            WriteSuccess("ForceAutoLogon -> Enabled");
+            ConsoleOutput.Success("ForceAutoLogon -> Enabled");
         }
         catch (Exception ex)
         {
-            WriteError($"Set ForceAutoLogon - {ex.Message}");
+            ConsoleOutput.Error($"Set ForceAutoLogon - {ex.Message}");
             _failures++;
         }
     }
@@ -679,12 +679,12 @@ public static class AutoLogonConfigurator
             if (key?.GetValue("AutoLogonCount") != null)
             {
                 key.DeleteValue("AutoLogonCount", throwOnMissingValue: false);
-                WriteSuccess("AutoLogonCount -> Removed");
+                ConsoleOutput.Success("AutoLogonCount -> Removed");
             }
         }
         catch (Exception ex)
         {
-            WriteWarning($"Remove AutoLogonCount - {ex.Message}");
+            ConsoleOutput.Warning($"Remove AutoLogonCount - {ex.Message}");
         }
     }
 
@@ -698,13 +698,13 @@ public static class AutoLogonConfigurator
 
             if (!string.IsNullOrWhiteSpace(legalNotice) || !string.IsNullOrWhiteSpace(legalCaption))
             {
-                WriteWarning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
+                ConsoleOutput.Warning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
                 try
                 {
                     using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
                     if (writableKey == null)
                     {
-                        WriteError("Could not open policy key for LegalNotice auto-fix.");
+                        ConsoleOutput.Error("Could not open policy key for LegalNotice auto-fix.");
                         _failures++;
                     }
                     else
@@ -718,18 +718,18 @@ public static class AutoLogonConfigurator
 
                         if (!string.IsNullOrWhiteSpace(legalNoticeAfter) || !string.IsNullOrWhiteSpace(legalCaptionAfter))
                         {
-                            WriteError("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
+                            ConsoleOutput.Error("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
                             _failures++;
                         }
                         else
                         {
-                            WriteSuccess("LegalNoticeText/LegalNoticeCaption -> Cleared");
+                            ConsoleOutput.Success("LegalNoticeText/LegalNoticeCaption -> Cleared");
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    WriteError($"Could not remove LegalNotice blocker: {ex.Message}");
+                    ConsoleOutput.Error($"Could not remove LegalNotice blocker: {ex.Message}");
                     _failures++;
                 }
             }
@@ -742,23 +742,23 @@ public static class AutoLogonConfigurator
                     using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
                     if (writableKey == null)
                     {
-                        WriteWarning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
+                        ConsoleOutput.Warning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
                     }
                     else
                     {
                         writableKey.SetValue("DontDisplayLastUserName", 0, RegistryValueKind.DWord);
-                        WriteSuccess("DontDisplayLastUserName -> Set to 0 (was 1)");
+                        ConsoleOutput.Success("DontDisplayLastUserName -> Set to 0 (was 1)");
                     }
                 }
                 catch (Exception ex)
                 {
-                    WriteWarning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
+                    ConsoleOutput.Warning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
                 }
             }
         }
         catch (Exception ex)
         {
-            WriteWarning($"Could not inspect auto-login blockers: {ex.Message}");
+            ConsoleOutput.Warning($"Could not inspect auto-login blockers: {ex.Message}");
         }
     }
 
@@ -788,49 +788,5 @@ public static class AutoLogonConfigurator
         return password.ToString();
     }
 
-    private static void WriteSuccess(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteInfo(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("  [INFO] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        string[] suffixes = ["B", "KB", "MB", "GB"];
-        var order = 0;
-        double size = bytes;
-        while (size >= 1024 && order < suffixes.Length - 1)
-        {
-            order++;
-            size /= 1024;
-        }
-
-        return $"{size:0.##} {suffixes[order]}";
-    }
+    private static string FormatBytes(long bytes) => Helpers.FormatBytes(bytes);
 }

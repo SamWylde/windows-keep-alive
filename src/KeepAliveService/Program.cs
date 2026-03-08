@@ -343,12 +343,7 @@ internal static class Program
         return false;
     }
 
-    private static bool IsRunningAsAdmin()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        var principal = new WindowsPrincipal(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
-    }
+    private static bool IsRunningAsAdmin() => KeepAliveService.Helpers.IsRunningAsAdmin();
 
     private static void PrintHelp()
     {

@@ -3,22 +3,43 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     Title="Windows Keep Alive"
-    Width="1080" Height="760"
-    MinWidth="900" MinHeight="650"
+    Width="820" Height="620"
+    MinWidth="700" MinHeight="500"
     WindowStartupLocation="CenterScreen"
     ExtendsContentIntoTitleBar="True"
-    WindowBackdropType="Mica">
+    WindowBackdropType="None"
+    Background="#FAFAFA"
+    Foreground="#1A1A1A">
 
-    <Grid>
+    <Grid TextElement.FontWeight="Medium">
+        <Grid.Resources>
+            <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="Foreground" Value="#888888" />
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Foreground" Value="#1A1A1A" />
+                        <Setter Property="FontWeight" Value="SemiBold" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="{Binding Title, RelativeSource={RelativeSource AncestorType=ui:FluentWindow}}" />
+        <ui:TitleBar Grid.Row="0" Title="{Binding Title, RelativeSource={RelativeSource AncestorType=ui:FluentWindow}}"
+                     FontSize="14" FontWeight="SemiBold"
+                     ShowMaximize="True" ShowMinimize="True">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/assets/app.ico" Width="18" Height="18" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
 
         <TabControl Grid.Row="1" x:Name="MainTabControl" Margin="12,0,12,8"
+                    FontSize="14"
                     SelectionChanged="MainTabControl_SelectionChanged">
 
             <!-- Setup Tab -->
@@ -117,7 +138,7 @@
                         <RichTextBox x:Name="OutputBox" IsReadOnly="True"
                                      FontFamily="Consolas" FontSize="10.5pt"
                                      VerticalScrollBarVisibility="Auto"
-                                     HorizontalScrollBarVisibility="Auto"
+                                     HorizontalScrollBarVisibility="Disabled"
                                      BorderThickness="0" IsDocumentEnabled="True">
                             <RichTextBox.ContextMenu>
                                 <ContextMenu>
@@ -133,31 +154,47 @@
 
             <!-- Status Tab -->
             <TabItem Header="Status">
-                <StackPanel Margin="16">
-                    <TextBlock x:Name="ServiceStatusLabel" FontSize="14" Margin="0,0,0,8" />
-                    <TextBlock x:Name="ComplianceLabel" FontSize="14"
-                               Text="Compliance: not checked" Margin="0,0,0,8" />
-                    <TextBlock x:Name="LastCheckLabel" Text="Last check: never"
-                               Opacity="0.6" Margin="0,0,0,16" />
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
 
-                    <StackPanel Orientation="Horizontal">
-                        <ui:Button Content="Run Check" x:Name="RunCheckButton"
-                                   Margin="0,0,8,0"
-                                   ToolTip="Verifies all settings are correctly applied."
-                                   Click="RunCheck_Click" />
-                        <ui:Button Content="Start Service" x:Name="StartServiceButton"
-                                   Margin="0,0,8,0"
-                                   ToolTip="Start the KeepAlive Windows service."
-                                   Click="StartService_Click" />
-                        <ui:Button Content="Stop Service" x:Name="StopServiceButton"
-                                   Margin="0,0,8,0"
-                                   ToolTip="Stop the KeepAlive Windows service."
-                                   Click="StopService_Click" />
-                        <ui:Button Content="Restart Service" x:Name="RestartServiceButton"
-                                   ToolTip="Restart the KeepAlive Windows service."
-                                   Click="RestartService_Click" />
+                    <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                        <TextBlock x:Name="ServiceStatusLabel" FontSize="14" Margin="0,0,0,8" />
+                        <TextBlock x:Name="ComplianceLabel" FontSize="14"
+                                   Text="Compliance: not checked" Margin="0,0,0,8" />
+                        <TextBlock x:Name="LastCheckLabel" Text="Last check: never"
+                                   Opacity="0.6" Margin="0,0,0,12" />
+
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button Content="Run Check" x:Name="RunCheckButton"
+                                       Margin="0,0,8,0"
+                                       ToolTip="Verifies all settings are correctly applied."
+                                       Click="RunCheck_Click" />
+                            <ui:Button Content="Start Service" x:Name="StartServiceButton"
+                                       Margin="0,0,8,0"
+                                       ToolTip="Start the KeepAlive Windows service."
+                                       Click="StartService_Click" />
+                            <ui:Button Content="Stop Service" x:Name="StopServiceButton"
+                                       Margin="0,0,8,0"
+                                       ToolTip="Stop the KeepAlive Windows service."
+                                       Click="StopService_Click" />
+                            <ui:Button Content="Restart Service" x:Name="RestartServiceButton"
+                                       ToolTip="Restart the KeepAlive Windows service."
+                                       Click="RestartService_Click" />
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
+
+                    <GroupBox Grid.Row="1" Header="Check Results" Padding="4">
+                        <TextBox x:Name="StatusOutputBox" IsReadOnly="True"
+                                 TextWrapping="NoWrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas" FontSize="10pt"
+                                 BorderThickness="0" />
+                    </GroupBox>
+                </Grid>
             </TabItem>
 
             <!-- Updates Tab -->

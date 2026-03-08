@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Principal;
 using System.ServiceProcess;
 using KeepAliveService.UI;
 using KeepAliveService.Update;
@@ -10,7 +9,7 @@ namespace KeepAliveService.Setup;
 public static class SetupManager
 {
     private const string SystemPolicyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
-    private static int _criticalFailures;
+    [ThreadStatic] private static int _criticalFailures;
 
     public static int RunSetup()
     {
@@ -45,7 +44,7 @@ public static class SetupManager
             }
             catch (Exception ex)
             {
-                WriteWarning($"Could not backup settings: {ex.Message} (continuing with setup)");
+                ConsoleOutput.Warning($"Could not backup settings: {ex.Message} (continuing with setup)");
             }
         }
 
@@ -88,7 +87,7 @@ public static class SetupManager
         var complianceResult = ComplianceChecker.RunCheck();
         if (complianceResult != 0)
         {
-            WriteError("Post-setup verification failed. The system is not fully compliant.");
+            ConsoleOutput.Error("Post-setup verification failed. The system is not fully compliant.");
             _criticalFailures++;
         }
 
@@ -111,7 +110,7 @@ public static class SetupManager
         }
         catch (Exception ex)
         {
-            WriteError($"{stepName} failed: {ex.Message}");
+            ConsoleOutput.Error($"{stepName} failed: {ex.Message}");
             return false;
         }
     }
@@ -138,7 +137,7 @@ public static class SetupManager
         // Check Administrator
         if (!IsRunningAsAdmin())
         {
-            WriteError("Not running as Administrator. Please run this program as Administrator.");
+            ConsoleOutput.Error("Not running as Administrator. Please run this program as Administrator.");
             Console.WriteLine();
             Console.WriteLine("  Right-click the executable and select 'Run as administrator', or");
             Console.WriteLine("  open an elevated command prompt and run the command from there.");
@@ -157,7 +156,7 @@ public static class SetupManager
 
             return false;
         }
-        WriteSuccess("Running as Administrator");
+        ConsoleOutput.Success("Running as Administrator");
 
         // Check Windows edition
         if (!CheckWindowsEdition())
@@ -183,12 +182,7 @@ public static class SetupManager
         return true;
     }
 
-    private static bool IsRunningAsAdmin()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        var principal = new WindowsPrincipal(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
-    }
+    private static bool IsRunningAsAdmin() => Helpers.IsRunningAsAdmin();
 
     private static void TrySelfElevate()
     {
@@ -210,7 +204,7 @@ public static class SetupManager
         }
         catch (Exception ex)
         {
-            WriteError($"Could not self-elevate: {ex.Message}");
+            ConsoleOutput.Error($"Could not self-elevate: {ex.Message}");
         }
     }
 
@@ -218,26 +212,26 @@ public static class SetupManager
     {
         if (!WindowsEditionHelper.TryGetWindowsEditionInfo(out var info, out var error) || info == null)
         {
-            WriteError($"Could not determine Windows requirements: {error}");
+            ConsoleOutput.Error($"Could not determine Windows requirements: {error}");
             return false;
         }
 
         if (!info.IsSupportedOsFamily)
         {
-            WriteError($"Windows product '{info.ProductName}' detected. This tool requires Windows 10 or Windows 11.");
+            ConsoleOutput.Error($"Windows product '{info.ProductName}' detected. This tool requires Windows 10 or Windows 11.");
             return false;
         }
 
         if (!info.SupportsBaseline)
         {
-            WriteError($"Windows build {info.BuildNumber} detected. This tool requires Windows 10 (build {WindowsEditionHelper.MinSupportedBuild}+) or Windows 11.");
+            ConsoleOutput.Error($"Windows build {info.BuildNumber} detected. This tool requires Windows 10 (build {WindowsEditionHelper.MinSupportedBuild}+) or Windows 11.");
             return false;
         }
 
-        WriteSuccess($"Windows Edition: {info.EditionId} ({info.ProductName}, Build {info.BuildNumber})");
+        ConsoleOutput.Success($"Windows Edition: {info.EditionId} ({info.ProductName}, Build {info.BuildNumber})");
         if (info.IsHomeOrCore)
         {
-            WriteWarning("Windows Home/Core detected: some HKLM\\SOFTWARE\\Policies settings may be ignored by the OS.");
+            ConsoleOutput.Warning("Windows Home/Core detected: some HKLM\\SOFTWARE\\Policies settings may be ignored by the OS.");
         }
 
         return true;
@@ -250,7 +244,7 @@ public static class SetupManager
         {
             using var sc = new ServiceController("TeamViewer");
             _ = sc.Status;
-            WriteSuccess($"TeamViewer service found (status: {sc.Status})");
+            ConsoleOutput.Success($"TeamViewer service found (status: {sc.Status})");
             return true;
         }
         catch (InvalidOperationException)
@@ -263,7 +257,7 @@ public static class SetupManager
         if (procs.Length > 0)
         {
             foreach (var p in procs) p.Dispose();
-            WriteSuccess("TeamViewer process found running");
+            ConsoleOutput.Success("TeamViewer process found running");
             return true;
         }
 
@@ -271,7 +265,7 @@ public static class SetupManager
         if (uiProcs.Length > 0)
         {
             foreach (var p in uiProcs) p.Dispose();
-            WriteSuccess("TeamViewer process found running");
+            ConsoleOutput.Success("TeamViewer process found running");
             return true;
         }
 
@@ -286,7 +280,7 @@ public static class SetupManager
         {
             if (File.Exists(path))
             {
-                WriteSuccess($"TeamViewer found at: {path}");
+                ConsoleOutput.Success($"TeamViewer found at: {path}");
                 return true;
             }
         }
@@ -301,7 +295,7 @@ public static class SetupManager
                 var fullPath = Path.Combine(installDir, "TeamViewer.exe");
                 if (File.Exists(fullPath))
                 {
-                    WriteSuccess($"TeamViewer found at: {fullPath}");
+                    ConsoleOutput.Success($"TeamViewer found at: {fullPath}");
                     return true;
                 }
             }
@@ -312,11 +306,11 @@ public static class SetupManager
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\TeamViewer.exe");
         if (appPathKey?.GetValue(null) is string appPath && File.Exists(appPath))
         {
-            WriteSuccess($"TeamViewer found at: {appPath}");
+            ConsoleOutput.Success($"TeamViewer found at: {appPath}");
             return true;
         }
 
-        WriteError("TeamViewer is not installed. Install TeamViewer before running setup.");
+        ConsoleOutput.Error("TeamViewer is not installed. Install TeamViewer before running setup.");
         Console.WriteLine("    Download from: https://www.teamviewer.com/en/download/");
         Console.WriteLine("    The watchdog cannot guarantee TeamViewer availability without it.");
         return false;
@@ -334,13 +328,13 @@ public static class SetupManager
 
             if (!string.IsNullOrWhiteSpace(legalNotice) || !string.IsNullOrWhiteSpace(legalCaption))
             {
-                WriteWarning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
+                ConsoleOutput.Warning("LegalNoticeText/LegalNoticeCaption is set (blocks auto-login). Removing...");
                 try
                 {
                     using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
                     if (writableKey == null)
                     {
-                        WriteError("Could not open policy key for LegalNotice auto-fix.");
+                        ConsoleOutput.Error("Could not open policy key for LegalNotice auto-fix.");
                         return false;
                     }
 
@@ -352,21 +346,21 @@ public static class SetupManager
                     var legalCaptionAfter = verifyKey?.GetValue("LegalNoticeCaption") as string;
                     if (!string.IsNullOrWhiteSpace(legalNoticeAfter) || !string.IsNullOrWhiteSpace(legalCaptionAfter))
                     {
-                        WriteError("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
+                        ConsoleOutput.Error("Could not remove LegalNotice blocker (value persisted, likely managed policy).");
                         return false;
                     }
 
-                    WriteSuccess("LegalNoticeText/LegalNoticeCaption -> Cleared");
+                    ConsoleOutput.Success("LegalNoticeText/LegalNoticeCaption -> Cleared");
                 }
                 catch (Exception ex)
                 {
-                    WriteError($"Could not remove LegalNotice blocker: {ex.Message}");
+                    ConsoleOutput.Error($"Could not remove LegalNotice blocker: {ex.Message}");
                     return false;
                 }
             }
             else
             {
-                WriteSuccess("No legal notice blocker");
+                ConsoleOutput.Success("No legal notice blocker");
             }
 
             // DontDisplayLastUserName can interfere
@@ -378,24 +372,24 @@ public static class SetupManager
                     using var writableKey = Registry.LocalMachine.OpenSubKey(SystemPolicyPath, writable: true);
                     if (writableKey == null)
                     {
-                        WriteWarning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
+                        ConsoleOutput.Warning("DontDisplayLastUserName auto-fix failed: policy key not writable.");
                     }
                     else
                     {
                         writableKey.SetValue("DontDisplayLastUserName", 0, RegistryValueKind.DWord);
-                        WriteSuccess("DontDisplayLastUserName -> Set to 0 (was 1)");
+                        ConsoleOutput.Success("DontDisplayLastUserName -> Set to 0 (was 1)");
                     }
                 }
                 catch (Exception ex)
                 {
-                    WriteWarning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
+                    ConsoleOutput.Warning($"DontDisplayLastUserName auto-fix failed: {ex.Message}");
                 }
             }
         }
         catch
         {
             // Key doesn't exist - no blockers
-            WriteSuccess("No login policy blockers detected");
+            ConsoleOutput.Success("No login policy blockers detected");
         }
 
         return true;
@@ -418,10 +412,10 @@ public static class SetupManager
 
                 if (lsaCfg is int lsaVal && lsaVal != 0)
                 {
-                    WriteWarning("Credential Guard appears to be enabled. Disabling via registry...");
+                    ConsoleOutput.Warning("Credential Guard appears to be enabled. Disabling via registry...");
                     if (TryDisableCredentialGuard())
                     {
-                        WriteSuccess("Credential Guard -> Disabled (registry). A reboot is required.");
+                        ConsoleOutput.Success("Credential Guard -> Disabled (registry). A reboot is required.");
                     }
                     else
                     {
@@ -446,17 +440,17 @@ public static class SetupManager
                 }
                 else
                 {
-                    WriteSuccess("VBS enabled but Credential Guard not configured");
+                    ConsoleOutput.Success("VBS enabled but Credential Guard not configured");
                 }
             }
             else
             {
-                WriteSuccess("Credential Guard: Not enabled");
+                ConsoleOutput.Success("Credential Guard: Not enabled");
             }
         }
         catch
         {
-            WriteSuccess("Credential Guard: Not detected");
+            ConsoleOutput.Success("Credential Guard: Not detected");
         }
     }
 
@@ -471,7 +465,7 @@ public static class SetupManager
 
             if (dgKey == null || lsaKey == null)
             {
-                WriteWarning("Could not auto-disable Credential Guard: required registry paths are not writable.");
+                ConsoleOutput.Warning("Could not auto-disable Credential Guard: required registry paths are not writable.");
                 return false;
             }
 
@@ -481,7 +475,7 @@ public static class SetupManager
         }
         catch (Exception ex)
         {
-            WriteWarning($"Could not auto-disable Credential Guard: {ex.Message}");
+            ConsoleOutput.Warning($"Could not auto-disable Credential Guard: {ex.Message}");
             return false;
         }
     }
@@ -537,27 +531,4 @@ public static class SetupManager
         Console.WriteLine();
     }
 
-    private static void WriteSuccess(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
 }

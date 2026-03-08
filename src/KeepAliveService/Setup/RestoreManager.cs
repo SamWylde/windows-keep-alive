@@ -7,7 +7,7 @@ namespace KeepAliveService.Setup;
 
 public static class RestoreManager
 {
-    private static int _failures;
+    [ThreadStatic] private static int _failures;
 
     // ========================
     // BACKUP (called before setup applies changes)
@@ -17,7 +17,7 @@ public static class RestoreManager
     {
         if (settings.OriginalSettingsBackup is { Count: > 0 })
         {
-            WriteInfo("Original settings backup already exists. Skipping backup.");
+            ConsoleOutput.Info("Original settings backup already exists. Skipping backup.");
             return;
         }
 
@@ -33,7 +33,7 @@ public static class RestoreManager
         settings.OriginalSettingsBackup = backup;
         settings.Save();
 
-        WriteSuccess($"Backed up {backup.Count} original settings");
+        ConsoleOutput.Success($"Backed up {backup.Count} original settings");
     }
 
     // ========================
@@ -55,7 +55,7 @@ public static class RestoreManager
 
         if (!hasBackup)
         {
-            WriteWarning("No original settings backup found. Will use Windows defaults where possible.");
+            ConsoleOutput.Warning("No original settings backup found. Will use Windows defaults where possible.");
             backup = new Dictionary<string, string>();
         }
 
@@ -98,7 +98,7 @@ public static class RestoreManager
         }
         else
         {
-            WriteWarning("Skipping setup state cleanup: some steps failed. Backup preserved for retry.");
+            ConsoleOutput.Warning("Skipping setup state cleanup: some steps failed. Backup preserved for retry.");
         }
 
         PrintSummary();
@@ -182,25 +182,11 @@ public static class RestoreManager
             var output = process?.StandardOutput.ReadToEnd() ?? "";
             process?.WaitForExit(10_000);
 
-            var searchTerm = isAc
-                ? "Current AC Power Setting Index"
-                : "Current DC Power Setting Index";
-
-            foreach (var line in output.Split('\n'))
+            var (acHex, dcHex) = Helpers.ParsePowerCfgSettingValues(output);
+            var hexValue = isAc ? acHex : dcHex;
+            if (hexValue != null)
             {
-                var trimmed = line.Trim();
-                if (!trimmed.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var colonIdx = trimmed.LastIndexOf(':');
-                if (colonIdx >= 0)
-                {
-                    var hexValue = trimmed[(colonIdx + 1)..].Trim();
-                    backup[key] = hexValue;
-                    return;
-                }
+                backup[key] = hexValue;
             }
         }
         catch
@@ -244,9 +230,16 @@ public static class RestoreManager
         BackupRegistryValue(backup, "registry.PasswordLess.DevicePasswordLessBuildVersion",
             Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device", "DevicePasswordLessBuildVersion");
 
-        // ARSO
+        // ARSO + login policy + LegalNotice (setup clears LegalNotice from this hive)
+        var systemPolicy = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+        BackupRegistryValue(backup, "registry.System.LegalNoticeCaption",
+            Registry.LocalMachine, systemPolicy, "LegalNoticeCaption");
+        BackupRegistryValue(backup, "registry.System.LegalNoticeText",
+            Registry.LocalMachine, systemPolicy, "LegalNoticeText");
         BackupRegistryValue(backup, "registry.System.DisableAutomaticRestartSignOn",
-            Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "DisableAutomaticRestartSignOn");
+            Registry.LocalMachine, systemPolicy, "DisableAutomaticRestartSignOn");
+        BackupRegistryValue(backup, "registry.System.DontDisplayLastUserName",
+            Registry.LocalMachine, systemPolicy, "DontDisplayLastUserName");
 
         // Lock screen
         BackupRegistryValue(backup, "registry.Personalization.NoLockScreen",
@@ -258,6 +251,12 @@ public static class RestoreManager
         BackupRegistryValue(backup, "registry.Desktop.ScreenSaveActive", Registry.LocalMachine, desktop, "ScreenSaveActive");
         BackupRegistryValue(backup, "registry.Desktop.ScreenSaveTimeOut", Registry.LocalMachine, desktop, "ScreenSaveTimeOut");
         BackupRegistryValue(backup, "registry.Desktop.SCRNSAVE.EXE", Registry.LocalMachine, desktop, "SCRNSAVE.EXE");
+
+        // Credential Guard (mutated by preflight)
+        BackupRegistryValue(backup, "registry.DeviceGuard.EnableVirtualizationBasedSecurity",
+            Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\DeviceGuard", "EnableVirtualizationBasedSecurity");
+        BackupRegistryValue(backup, "registry.Lsa.LsaCfgFlags",
+            Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\Lsa", "LsaCfgFlags");
 
         // Update policy
         var auPath = @"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
@@ -317,7 +316,7 @@ public static class RestoreManager
                 var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
                 var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
 
-                if (IsVirtualAdapter(driverDesc, componentId)) continue;
+                if (NetworkConfigurator.IsVirtualAdapter(driverDesc, componentId)) continue;
 
                 var pnpCap = adapterKey.GetValue("PnPCapabilities");
                 var backupKey = $"network.adapter.{subKeyName}.PnPCapabilities";
@@ -341,22 +340,22 @@ public static class RestoreManager
             using var sc = new ServiceController("KeepAliveService");
             if (sc.Status == ServiceControllerStatus.Running)
             {
-                WriteInfo("Stopping KeepAlive service...");
+                ConsoleOutput.Info("Stopping KeepAlive service...");
                 sc.Stop();
                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
-                WriteSuccess("Service stopped");
+                ConsoleOutput.Success("Service stopped");
             }
 
             return true;
         }
         catch (InvalidOperationException)
         {
-            WriteInfo("Service not found (may not be installed)");
+            ConsoleOutput.Info("Service not found (may not be installed)");
             return true;
         }
         catch (Exception ex)
         {
-            WriteWarning($"Error stopping service: {ex.Message}");
+            ConsoleOutput.Warning($"Error stopping service: {ex.Message}");
             return false;
         }
     }
@@ -369,7 +368,7 @@ public static class RestoreManager
         }
         catch (Exception ex)
         {
-            WriteError($"Service removal failed: {ex.Message}");
+            ConsoleOutput.Error($"Service removal failed: {ex.Message}");
             return false;
         }
     }
@@ -470,10 +469,35 @@ public static class RestoreManager
             Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device",
             "DevicePasswordLessBuildVersion", "DevicePasswordLessBuildVersion");
 
-        // Restore ARSO
+        // Restore ARSO + login policy + LegalNotice
+        var systemPolicy = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+
+        // Restore LegalNotice to Policies\System (where setup clears it).
+        // Fall back to old backup key for existing backups created before hive fix.
+        var legalCaptionKey = backup.ContainsKey("registry.System.LegalNoticeCaption")
+            ? "registry.System.LegalNoticeCaption"
+            : "registry.Winlogon.LegalNoticeCaption";
+        var legalTextKey = backup.ContainsKey("registry.System.LegalNoticeText")
+            ? "registry.System.LegalNoticeText"
+            : "registry.Winlogon.LegalNoticeText";
+        ok &= RestoreRegistryFromBackup(backup, legalCaptionKey,
+            Registry.LocalMachine, systemPolicy, "LegalNoticeCaption", "LegalNoticeCaption");
+        ok &= RestoreRegistryFromBackup(backup, legalTextKey,
+            Registry.LocalMachine, systemPolicy, "LegalNoticeText", "LegalNoticeText");
         ok &= RestoreRegistryFromBackup(backup, "registry.System.DisableAutomaticRestartSignOn",
-            Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+            Registry.LocalMachine, systemPolicy,
             "DisableAutomaticRestartSignOn", "DisableAutomaticRestartSignOn");
+        ok &= RestoreRegistryFromBackup(backup, "registry.System.DontDisplayLastUserName",
+            Registry.LocalMachine, systemPolicy,
+            "DontDisplayLastUserName", "DontDisplayLastUserName");
+
+        // Restore Credential Guard
+        ok &= RestoreRegistryFromBackup(backup, "registry.DeviceGuard.EnableVirtualizationBasedSecurity",
+            Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\DeviceGuard",
+            "EnableVirtualizationBasedSecurity", "EnableVirtualizationBasedSecurity");
+        ok &= RestoreRegistryFromBackup(backup, "registry.Lsa.LsaCfgFlags",
+            Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\Lsa",
+            "LsaCfgFlags", "LsaCfgFlags");
 
         // Restore lock screen
         ok &= RestoreRegistryFromBackup(backup, "registry.Personalization.NoLockScreen",
@@ -521,7 +545,7 @@ public static class RestoreManager
                 @"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}");
             if (networkKey == null)
             {
-                WriteWarning("Could not open network adapter registry key");
+                ConsoleOutput.Warning("Could not open network adapter registry key");
                 return true;
             }
 
@@ -541,12 +565,12 @@ public static class RestoreManager
                 if (stored == "<not-set>")
                 {
                     adapterKey.DeleteValue("PnPCapabilities", throwOnMissingValue: false);
-                    WriteSuccess($"PnPCapabilities removed for: {driverDesc}");
+                    ConsoleOutput.Success($"PnPCapabilities removed for: {driverDesc}");
                 }
                 else if (stored.StartsWith("dword:") && int.TryParse(stored[6..], out var val))
                 {
                     adapterKey.SetValue("PnPCapabilities", val, RegistryValueKind.DWord);
-                    WriteSuccess($"PnPCapabilities restored to {val} for: {driverDesc}");
+                    ConsoleOutput.Success($"PnPCapabilities restored to {val} for: {driverDesc}");
                 }
             }
 
@@ -554,7 +578,7 @@ public static class RestoreManager
         }
         catch (Exception ex)
         {
-            WriteError($"Network adapter restore failed: {ex.Message}");
+            ConsoleOutput.Error($"Network adapter restore failed: {ex.Message}");
             return false;
         }
     }
@@ -574,7 +598,7 @@ public static class RestoreManager
         }
         catch (Exception ex)
         {
-            WriteError($"{stepName} failed: {ex.Message}");
+            ConsoleOutput.Error($"{stepName} failed: {ex.Message}");
             _failures++;
         }
     }
@@ -642,8 +666,8 @@ public static class RestoreManager
                 FileName = "powercfg.exe",
                 Arguments = arguments,
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
                 CreateNoWindow = true,
             };
 
@@ -652,16 +676,16 @@ public static class RestoreManager
 
             if (process?.ExitCode == 0)
             {
-                WriteSuccess(description);
+                ConsoleOutput.Success(description);
                 return true;
             }
 
-            WriteWarning($"{description} - powercfg exit code {process?.ExitCode}");
+            ConsoleOutput.Warning($"{description} - powercfg exit code {process?.ExitCode}");
             return false;
         }
         catch (Exception ex)
         {
-            WriteError($"{description} - {ex.Message}");
+            ConsoleOutput.Error($"{description} - {ex.Message}");
             return false;
         }
     }
@@ -674,12 +698,12 @@ public static class RestoreManager
         {
             using var key = root.CreateSubKey(path, writable: true);
             key?.SetValue(name, value, kind);
-            WriteSuccess(description);
+            ConsoleOutput.Success(description);
             return true;
         }
         catch (Exception ex)
         {
-            WriteError($"{description} - {ex.Message}");
+            ConsoleOutput.Error($"{description} - {ex.Message}");
             return false;
         }
     }
@@ -695,12 +719,12 @@ public static class RestoreManager
                 key.DeleteValue(name, throwOnMissingValue: false);
             }
 
-            WriteSuccess(description);
+            ConsoleOutput.Success(description);
             return true;
         }
         catch (Exception ex)
         {
-            WriteWarning($"{description} - {ex.Message}");
+            ConsoleOutput.Warning($"{description} - {ex.Message}");
             return false;
         }
     }
@@ -715,20 +739,6 @@ public static class RestoreManager
         }
 
         return int.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber, null, out result);
-    }
-
-    private static bool IsVirtualAdapter(string driverDesc, string componentId)
-    {
-        return driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-               driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
-               driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
-               driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
-               driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
-               driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
-               componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
-               componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
-               componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
-               componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void PrintSummary()
@@ -762,35 +772,4 @@ public static class RestoreManager
         Console.WriteLine();
     }
 
-    private static void WriteSuccess(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteInfo(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write("  [INFO] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
 }

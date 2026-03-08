@@ -5,7 +5,7 @@ namespace KeepAliveService.Setup;
 
 public static class NetworkConfigurator
 {
-    private static int _failures;
+    [ThreadStatic] private static int _failures;
 
     public static bool Configure()
     {
@@ -52,7 +52,7 @@ public static class NetworkConfigurator
 
             if (networkKey == null)
             {
-                WriteWarning("Could not open network adapter registry key");
+                ConsoleOutput.Warning("Could not open network adapter registry key");
                 return;
             }
 
@@ -68,42 +68,32 @@ public static class NetworkConfigurator
                 var driverDesc = adapterKey.GetValue("DriverDesc") as string ?? "";
                 var componentId = adapterKey.GetValue("ComponentId") as string ?? "";
 
-                var isVirtual = driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
-                                driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
-                                componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
-
-                if (isVirtual) continue;
+                if (IsVirtualAdapter(driverDesc, componentId)) continue;
 
                 adaptersFound++;
 
-                // PnPCapabilities: 0x18 (24) = disable power management
+                // PnPCapabilities: set bits 0x18 (24) to disable power management
                 // 0x10 = PDCAP_D1_SUPPORTED (don't allow D1 state)
                 // 0x08 = PDCAP_D2_SUPPORTED (don't allow D2 state)
-                // Combined = disable OS power management for this device
-                adapterKey.SetValue("PnPCapabilities", 24, RegistryValueKind.DWord);
-                WriteSuccess($"Disabled power management for: {driverDesc}");
+                // Use bitwise OR to preserve any existing flags
+                var existing = adapterKey.GetValue("PnPCapabilities") as int? ?? 0;
+                adapterKey.SetValue("PnPCapabilities", existing | 0x18, RegistryValueKind.DWord);
+                ConsoleOutput.Success($"Disabled power management for: {driverDesc}");
             }
 
             if (adaptersFound == 0)
             {
-                WriteWarning("No eligible physical network adapters found in registry");
+                ConsoleOutput.Warning("No eligible physical network adapters found in registry");
             }
         }
         catch (UnauthorizedAccessException)
         {
-            WriteError("Cannot modify adapter power management - access denied (run as Administrator)");
+            ConsoleOutput.Error("Cannot modify adapter power management - access denied (run as Administrator)");
             _failures++;
         }
         catch (Exception ex)
         {
-            WriteWarning($"Adapter power management: {ex.Message}");
+            ConsoleOutput.Warning($"Adapter power management: {ex.Message}");
         }
     }
 
@@ -126,42 +116,33 @@ public static class NetworkConfigurator
 
             if (process?.ExitCode == 0)
             {
-                WriteSuccess(description);
+                ConsoleOutput.Success(description);
             }
             else
             {
-                WriteWarning($"{description} - powercfg returned exit code {process?.ExitCode}");
+                ConsoleOutput.Warning($"{description} - powercfg returned exit code {process?.ExitCode}");
                 _failures++;
             }
         }
         catch (Exception ex)
         {
-            WriteError($"{description} - {ex.Message}");
+            ConsoleOutput.Error($"{description} - {ex.Message}");
             _failures++;
         }
     }
 
-    private static void WriteSuccess(string message)
+    public static bool IsVirtualAdapter(string driverDesc, string componentId)
     {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write("  [OK] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
+        return driverDesc.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
+               driverDesc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) ||
+               driverDesc.Contains("WAN Miniport", StringComparison.OrdinalIgnoreCase) ||
+               driverDesc.Contains("TAP-", StringComparison.OrdinalIgnoreCase) ||
+               driverDesc.Contains("Kernel Debug", StringComparison.OrdinalIgnoreCase) ||
+               driverDesc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase) ||
+               componentId.Contains("vwifimp", StringComparison.OrdinalIgnoreCase) ||
+               componentId.Contains("loopback", StringComparison.OrdinalIgnoreCase) ||
+               componentId.Contains("tunnel", StringComparison.OrdinalIgnoreCase) ||
+               componentId.Contains("ms_", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void WriteWarning(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write("  [WARN] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
-
-    private static void WriteError(string message)
-    {
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Write("  [FAIL] ");
-        Console.ResetColor();
-        Console.WriteLine(message);
-    }
 }

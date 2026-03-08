@@ -165,6 +165,12 @@ public sealed class GitHubUpdateChecker : IDisposable
             var tempExe = Path.Combine(Path.GetTempPath(), $"KeepAliveService_update_{Guid.NewGuid():N}.exe");
             await DownloadFileAsync(update.DownloadUrl, tempExe, progress, cancellationToken);
 
+            if (!IsValidPortableExecutable(tempExe))
+            {
+                try { File.Delete(tempExe); } catch { }
+                return new UpdateApplyResult(false, "Downloaded file is not a valid Windows executable. Update aborted.");
+            }
+
             var scriptPath = Path.Combine(Path.GetTempPath(), $"KeepAliveService_apply_{Guid.NewGuid():N}.cmd");
             var script = BuildUpdateScript(
                 targetExe,
@@ -215,6 +221,42 @@ public sealed class GitHubUpdateChecker : IDisposable
         }
 
         progress?.Report(new DownloadProgress(totalRead, totalBytes));
+    }
+
+    private static bool IsValidPortableExecutable(string filePath)
+    {
+        try
+        {
+            using var stream = File.OpenRead(filePath);
+            if (stream.Length < 64)
+                return false;
+
+            var header = new byte[4];
+
+            // Check MZ DOS header
+            if (stream.Read(header, 0, 2) < 2 || header[0] != 0x4D || header[1] != 0x5A)
+                return false;
+
+            // Read PE header offset at 0x3C
+            stream.Seek(0x3C, SeekOrigin.Begin);
+            if (stream.Read(header, 0, 4) < 4)
+                return false;
+
+            var peOffset = BitConverter.ToInt32(header, 0);
+            if (peOffset < 0 || peOffset + 4 > stream.Length)
+                return false;
+
+            // Check PE\0\0 signature
+            stream.Seek(peOffset, SeekOrigin.Begin);
+            if (stream.Read(header, 0, 4) < 4)
+                return false;
+
+            return header[0] == 0x50 && header[1] == 0x45 && header[2] == 0x00 && header[3] == 0x00;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static (string? assetName, string? downloadUrl) SelectExeAsset(JsonElement root)

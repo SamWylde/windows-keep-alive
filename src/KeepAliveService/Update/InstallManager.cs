@@ -45,7 +45,8 @@ public static class InstallManager
         }
         catch (IOException)
         {
-            // The exe may be locked by the running service. Stop it and retry.
+            // The exe may be locked by the running service or an existing GUI instance.
+            // Stop/kill both before retrying.
             try
             {
                 using var sc = new System.ServiceProcess.ServiceController("KeepAliveService");
@@ -60,7 +61,8 @@ public static class InstallManager
                 // Service may not be installed yet.
             }
 
-            Thread.Sleep(500);
+            KillExistingGuiInstances();
+            Thread.Sleep(1000);
             File.Copy(currentPath, CanonicalExePath, overwrite: true);
         }
         EnsureDesktopShortcut();
@@ -105,6 +107,36 @@ public static class InstallManager
         }
     }
 
+    private static void KillExistingGuiInstances()
+    {
+        try
+        {
+            var currentPid = Environment.ProcessId;
+            foreach (var proc in Process.GetProcessesByName("KeepAliveService"))
+            {
+                try
+                {
+                    if (proc.Id == currentPid)
+                        continue;
+                    proc.Kill();
+                    proc.WaitForExit(5000);
+                }
+                catch
+                {
+                    // Best effort — process may have already exited.
+                }
+                finally
+                {
+                    proc.Dispose();
+                }
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     private static bool PathsEqual(string left, string right)
     {
         return string.Equals(
@@ -115,19 +147,19 @@ public static class InstallManager
 
     public static void RemoveDesktopShortcut()
     {
+        // Remove from both public and per-user desktops (older installs used per-user).
+        RemoveShortcutFrom(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory));
+        RemoveShortcutFrom(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+    }
+
+    private static void RemoveShortcutFrom(string? desktopPath)
+    {
         try
         {
-            var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            if (string.IsNullOrWhiteSpace(desktopPath))
-            {
-                return;
-            }
-
+            if (string.IsNullOrWhiteSpace(desktopPath)) return;
             var shortcutPath = Path.Combine(desktopPath, "Windows Keep Alive.lnk");
             if (File.Exists(shortcutPath))
-            {
                 File.Delete(shortcutPath);
-            }
         }
         catch
         {
@@ -139,7 +171,9 @@ public static class InstallManager
     {
         try
         {
-            var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            // Use public (all-users) desktop so the shortcut is available regardless of
+            // which admin account runs setup, avoiding mismatch with the autologon user.
+            var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
             if (string.IsNullOrWhiteSpace(desktopPath))
             {
                 return;
