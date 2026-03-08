@@ -126,10 +126,14 @@
                                            Margin="0,0,8,0"
                                            ToolTip="Changes only the auto-login password (leaves all other settings intact)."
                                            Click="UpdatePassword_Click" />
-                                <ui:Button Content="Restore &amp; Uninstall" x:Name="UninstallButton"
-                                           Appearance="Danger"
-                                           ToolTip="Restores all Windows settings to their original values, removes the service, startup task, and shortcuts."
-                                           Click="RestoreUninstall_Click" />
+                                <ui:Button Content="Restore" x:Name="RestoreButton"
+                                           Appearance="Caution"
+                                           ToolTip="Restores all Windows settings to their original values and removes the service. The program stays installed for future use."
+                                           Click="Restore_Click" />
+                                <ui:Button Content="Uninstall" x:Name="UninstallButton"
+                                           Appearance="Danger" Margin="8,0,0,0"
+                                           ToolTip="Restores all settings AND removes the program completely from this machine."
+                                           Click="Uninstall_Click" />
                             </StackPanel>
                         </StackPanel>
                     </GroupBox>

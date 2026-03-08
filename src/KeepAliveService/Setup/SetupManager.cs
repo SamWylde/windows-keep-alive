@@ -526,8 +526,8 @@ public static class SetupManager
         Console.WriteLine("  Useful commands:");
         Console.WriteLine("    KeepAliveService.exe --check            Verify all settings");
         Console.WriteLine("    KeepAliveService.exe --update-password   Update auto-login password");
-        Console.WriteLine("    KeepAliveService.exe --restore           Restore all settings and uninstall");
-        Console.WriteLine("    KeepAliveService.exe --uninstall         Remove the service only");
+        Console.WriteLine("    KeepAliveService.exe --restore           Restore original settings (keeps program installed)");
+        Console.WriteLine("    KeepAliveService.exe --uninstall         Full uninstall (restore settings + remove program)");
         Console.WriteLine();
     }
 
