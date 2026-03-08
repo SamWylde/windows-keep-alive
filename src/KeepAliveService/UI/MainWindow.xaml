@@ -52,8 +52,8 @@
 
                     <GroupBox Grid.Row="0" Header="Quick Setup" Margin="0,0,0,12" Padding="12">
                         <StackPanel>
-                            <TextBlock Text="Configure keep-alive, auto-login, update policy, network, and service with one click."
-                                       Margin="0,0,0,12" Opacity="0.6" />
+                            <TextBlock x:Name="SetupStatusLabel"
+                                       Margin="0,0,0,12" FontWeight="SemiBold" />
 
                             <Grid>
                                 <Grid.ColumnDefinitions>

@@ -152,6 +152,7 @@ public sealed partial class MainWindow : FluentWindow
         _settings.Save();
 
         LoadSavedCredentialInputs();
+        RefreshSetupStatus();
 
         Console.WriteLine("[INFO] Windows Keep Alive GUI started.");
         Console.WriteLine($"[INFO] Install path: {InstallManager.CanonicalExePath}");
@@ -680,6 +681,7 @@ public sealed partial class MainWindow : FluentWindow
             _isOperationRunning = false;
             SetControlsEnabled(true);
             RefreshServiceStatus();
+            RefreshSetupStatus();
             RefreshLogViewer();
             UpdateStatusStrip.Text = _lastUpdateResult?.IsUpdateAvailable == true
                 ? $"Update available: v{FormatVersion(_lastUpdateResult.LatestVersion)}"
@@ -1129,6 +1131,24 @@ public sealed partial class MainWindow : FluentWindow
         }
 
         ApplyServiceButtonState();
+    }
+
+    private void RefreshSetupStatus()
+    {
+        // Reload from disk in case setup/restore/uninstall changed the state
+        var current = AppSettings.Load();
+
+        if (current.SetupCompletedUtc != null)
+        {
+            var completed = current.SetupCompletedUtc.Value.ToLocalTime();
+            SetupStatusLabel.Text = $"Status: Active — setup completed {completed:yyyy-MM-dd HH:mm}";
+            SetupStatusLabel.Foreground = Brushes.ForestGreen;
+        }
+        else
+        {
+            SetupStatusLabel.Text = "Status: Not configured — enter your credentials and click Run Setup to get started.";
+            SetupStatusLabel.Foreground = Brushes.DarkGoldenrod;
+        }
     }
 
     private void ApplyServiceButtonState()
