@@ -62,6 +62,11 @@ public sealed partial class MainWindow : FluentWindow
         _originalConsoleOut = Console.Out;
         _originalConsoleError = Console.Error;
 
+        // Must be set before InitializeComponent — XAML event handlers
+        // (TextChanged, SelectionChanged) fire during parsing and would
+        // call QueueCredentialPersistence() before timers are initialized.
+        _suppressCredentialPersistence = true;
+
         InitializeComponent();
 
         var version = FormatVersion(Assembly.GetExecutingAssembly().GetName().Version);
@@ -730,7 +735,7 @@ public sealed partial class MainWindow : FluentWindow
 
     private void QueueCredentialPersistence()
     {
-        if (_suppressCredentialPersistence)
+        if (_suppressCredentialPersistence || _credentialPersistTimer == null)
             return;
         _credentialPersistTimer.Stop();
         _credentialPersistTimer.Start();
