@@ -15,6 +15,12 @@ public sealed class RichTextBoxWriter : TextWriter
     private readonly string _logFilePath;
     private int _linesSinceRotationCheck;
 
+    private Color _failColor = Color.Firebrick;
+    private Color _warnColor = Color.DarkGoldenrod;
+    private Color _passColor = Color.ForestGreen;
+    private Color _infoColor = Color.SteelBlue;
+    private Color _defaultColor = Color.Gainsboro;
+
     public RichTextBoxWriter(RichTextBox outputBox)
     {
         _outputBox = outputBox;
@@ -24,6 +30,15 @@ public sealed class RichTextBoxWriter : TextWriter
     }
 
     public override Encoding Encoding => Encoding.UTF8;
+
+    public void SetLogColors(Color fail, Color warn, Color pass, Color info, Color defaultColor)
+    {
+        _failColor = fail;
+        _warnColor = warn;
+        _passColor = pass;
+        _infoColor = info;
+        _defaultColor = defaultColor;
+    }
 
     public override void Write(char value)
     {
@@ -179,29 +194,29 @@ public sealed class RichTextBoxWriter : TextWriter
         }
     }
 
-    private static Color ResolveColor(string line)
+    private Color ResolveColor(string line)
     {
         if (line.Contains("[FAIL]", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.Firebrick;
+            return _failColor;
         }
 
         if (line.Contains("[WARN]", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.DarkGoldenrod;
+            return _warnColor;
         }
 
         if (line.Contains("[PASS]", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("[OK]", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.ForestGreen;
+            return _passColor;
         }
 
         if (line.Contains("[INFO]", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.SteelBlue;
+            return _infoColor;
         }
 
-        return Color.Gainsboro;
+        return _defaultColor;
     }
 }

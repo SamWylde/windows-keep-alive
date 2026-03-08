@@ -62,7 +62,7 @@ public static class ServiceInstaller
         }
     }
 
-    public static void Uninstall()
+    public static bool Uninstall()
     {
         Console.WriteLine();
         Console.WriteLine("=== Service Uninstall ===");
@@ -81,28 +81,42 @@ public static class ServiceInstaller
         catch (InvalidOperationException)
         {
             WriteInfo("Service not found (may already be uninstalled)");
+            return true; // Already gone
         }
         catch (Exception ex)
         {
             WriteWarning($"Error stopping service: {ex.Message}");
         }
 
-        // Give SCM time to release the service
-        Thread.Sleep(2000);
-
         // Delete the service
-        if (RunSc($"delete {ServiceName}", "Service removed"))
+        RunSc($"delete {ServiceName}", "Service removed");
+
+        // Wait for SCM to fully release the service after delete
+        WaitForServiceDeletion();
+
+        // Verify the service is actually gone
+        if (IsServicePresent())
         {
-            WriteSuccess("Uninstall complete");
-        }
-        else
-        {
-            WriteWarning("Service may already be removed");
+            WriteError("Service still exists after deletion attempt");
+            return false;
         }
 
-        Console.WriteLine();
-        Console.WriteLine("  Note: Windows settings (power, auto-login, update policy) were NOT reverted.");
-        Console.WriteLine("  To undo those, change them manually in Windows Settings.");
+        WriteSuccess("Uninstall complete");
+        return true;
+    }
+
+    private static bool IsServicePresent()
+    {
+        try
+        {
+            using var sc = new ServiceController(ServiceName);
+            _ = sc.Status;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static void RemoveExistingService()
@@ -120,13 +134,34 @@ public static class ServiceInstaller
                 sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
             }
 
-            Thread.Sleep(2000);
             RunSc($"delete {ServiceName}", "Existing service removed");
-            Thread.Sleep(2000);
+            WaitForServiceDeletion();
         }
         catch (InvalidOperationException)
         {
             // Service doesn't exist yet - that's fine
+        }
+    }
+
+    private static void WaitForServiceDeletion()
+    {
+        // Poll SCM until the service is fully removed (sc query returns error 1060)
+        // instead of using a fixed Thread.Sleep which can be too short.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var sc = new ServiceController(ServiceName);
+                _ = sc.Status;
+                // Service still exists - wait briefly and retry
+                Thread.Sleep(500);
+            }
+            catch (InvalidOperationException)
+            {
+                // Service no longer exists - deletion complete
+                return;
+            }
         }
     }
 

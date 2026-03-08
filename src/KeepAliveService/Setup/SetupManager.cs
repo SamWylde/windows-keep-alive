@@ -31,6 +31,24 @@ public static class SetupManager
         Console.WriteLine("  Windows Keep Alive - Setup");
         Console.WriteLine("========================================");
 
+        // Backup current settings BEFORE preflight, because preflight may
+        // mutate registry state (LegalNotice, DontDisplayLastUserName,
+        // Credential Guard). Must capture true pre-setup values.
+        // Only attempt when running as admin — a non-admin backup would produce
+        // incomplete data, and the write-once guard would prevent re-capture later.
+        if (IsRunningAsAdmin())
+        {
+            try
+            {
+                var settings = AppSettings.Load();
+                RestoreManager.BackupCurrentSettings(settings);
+            }
+            catch (Exception ex)
+            {
+                WriteWarning($"Could not backup settings: {ex.Message} (continuing with setup)");
+            }
+        }
+
         // Step 0: Preflight checks
         if (!RunPreflightChecks(skipAdminPrompt))
         {
@@ -60,6 +78,9 @@ public static class SetupManager
         // Step 5: Install self as service
         if (!TryRun("Service installation", ServiceInstaller.Install))
             _criticalFailures++;
+
+        // Step 5.5: Register startup task (GUI auto-start at logon)
+        TryRun("Startup task", StartupTaskManager.EnsureTask);
 
         // Step 6: Run compliance check to verify everything was applied correctly
         Console.WriteLine();
@@ -496,6 +517,7 @@ public static class SetupManager
             Console.WriteLine("    - Power: sleep/hibernate/lid-close all set to never/do nothing");
             Console.WriteLine("    - WiFi: power saving set to Maximum Performance");
             Console.WriteLine("    - KeepAlive service: installed, running, auto-start");
+            Console.WriteLine("    - Startup task: GUI auto-launches at logon (minimized to tray)");
             Console.WriteLine();
             Console.WriteLine("  The KeepAlive service is now:");
             Console.WriteLine("    - Preventing system sleep via SetThreadExecutionState API");
@@ -508,9 +530,10 @@ public static class SetupManager
         Console.ResetColor();
         Console.WriteLine();
         Console.WriteLine("  Useful commands:");
-        Console.WriteLine("    KeepAliveService.exe --check           Verify all settings");
-        Console.WriteLine("    KeepAliveService.exe --update-password  Update auto-login password");
-        Console.WriteLine("    KeepAliveService.exe --uninstall        Remove the service");
+        Console.WriteLine("    KeepAliveService.exe --check            Verify all settings");
+        Console.WriteLine("    KeepAliveService.exe --update-password   Update auto-login password");
+        Console.WriteLine("    KeepAliveService.exe --restore           Restore all settings and uninstall");
+        Console.WriteLine("    KeepAliveService.exe --uninstall         Remove the service only");
         Console.WriteLine();
     }
 

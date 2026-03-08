@@ -71,7 +71,9 @@ public class ComplianceWatchdogWorker : BackgroundService
             return;
         }
 
-        var initialCompliance = ComplianceChecker.RunCheck();
+        // Skip startup task check: the watchdog runs as SYSTEM and cannot
+        // create a correct user-session scheduled task.
+        var initialCompliance = ComplianceChecker.RunCheck(includeStartupTask: false);
         if (initialCompliance == 0)
         {
             _consecutiveRemediationFailures = 0;
@@ -85,8 +87,11 @@ public class ComplianceWatchdogWorker : BackgroundService
         var autoLoginOk = TryApplyStep("Auto-login non-credential settings", AutoLogonConfigurator.ApplyNonCredentialSettings);
         var powerOk = TryApplyStep("Power settings", PowerConfigurator.Configure);
         var networkOk = TryApplyStep("Network settings", NetworkConfigurator.Configure);
+        // NOTE: Startup task is NOT remediated here. The watchdog runs as SYSTEM,
+        // which would create the task under the wrong principal. Only interactive
+        // setup (running as the logged-in user) can create a proper user-session task.
 
-        var finalCompliance = ComplianceChecker.RunCheck();
+        var finalCompliance = ComplianceChecker.RunCheck(includeStartupTask: false);
         if (finalCompliance == 0 && updatePolicyOk && autoLoginOk && powerOk && networkOk)
         {
             _consecutiveRemediationFailures = 0;

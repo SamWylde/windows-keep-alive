@@ -89,6 +89,28 @@ public static class InstallManager
             StringComparison.OrdinalIgnoreCase);
     }
 
+    public static void RemoveDesktopShortcut()
+    {
+        try
+        {
+            var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (string.IsNullOrWhiteSpace(desktopPath))
+            {
+                return;
+            }
+
+            var shortcutPath = Path.Combine(desktopPath, "Windows Keep Alive.lnk");
+            if (File.Exists(shortcutPath))
+            {
+                File.Delete(shortcutPath);
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     private static void EnsureDesktopShortcut()
     {
         try

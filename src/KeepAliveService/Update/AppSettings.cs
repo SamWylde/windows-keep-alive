@@ -34,6 +34,8 @@ public sealed class AppSettings
 
     public string? SavedPasswordEncrypted { get; set; }
 
+    public Dictionary<string, string>? OriginalSettingsBackup { get; set; }
+
     public static string ProgramDataDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WindowsKeepAlive");
 
@@ -82,6 +84,29 @@ public sealed class AppSettings
     {
         EnsureDirectories();
         UpdateCheckIntervalHours = NormalizeInterval(UpdateCheckIntervalHours);
+
+        // Preserve fields that may have been written by another process (e.g. setup
+        // writes OriginalSettingsBackup and SetupCompletedUtc while the GUI holds a
+        // stale in-memory instance). Without this, a GUI credential save would erase
+        // the backup data written by setup.
+        if (File.Exists(SettingsPath))
+        {
+            try
+            {
+                var existing = JsonSerializer.Deserialize<AppSettings>(
+                    File.ReadAllText(SettingsPath), JsonOptions);
+                if (existing != null)
+                {
+                    OriginalSettingsBackup ??= existing.OriginalSettingsBackup;
+                    SetupCompletedUtc ??= existing.SetupCompletedUtc;
+                }
+            }
+            catch
+            {
+                // Best effort — proceed with current values.
+            }
+        }
+
         var json = JsonSerializer.Serialize(this, JsonOptions);
         File.WriteAllText(SettingsPath, json);
     }

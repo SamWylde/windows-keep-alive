@@ -58,16 +58,21 @@ public sealed class MainForm : Form
     private bool _suppressCredentialPersistence;
     private bool _isStartupUpdateCheck;
     private bool _startupUpdatePromptShown;
+    private readonly bool _startMinimized;
     private bool _allowClose;
     private bool _trayHintShown;
     private bool _serviceInstalled;
+    private ThemeMode _currentTheme;
+    private Palette _palette = null!;
+    private IDisposable? _themeSubscription;
     private ServiceControllerStatus? _currentServiceStatus;
     private long _lastLogLength = -1;
     private DateTime _lastStatusTabCheckUtc = DateTime.MinValue;
     private UpdateCheckResult? _lastUpdateResult;
 
-    public MainForm()
+    public MainForm(bool startMinimized = false)
     {
+        _startMinimized = startMinimized;
         _settings = AppSettings.Load();
         _updateChecker = new GitHubUpdateChecker(_settings);
         _originalConsoleOut = Console.Out;
@@ -141,7 +146,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Padding = new Padding(10),
+            Padding = new Padding(AppTheme.SpacingMedium),
         };
         setupRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         setupRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -153,7 +158,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12),
+            Padding = new Padding(AppTheme.SpacingMedium),
         };
         setupRoot.Controls.Add(quickSetupGroup, 0, 0);
 
@@ -174,7 +179,7 @@ public sealed class MainForm : Form
         {
             AutoSize = true,
             Text = "Configure keep-alive, auto-login, update policy, network, and service with one click.",
-            Margin = new Padding(0, 0, 0, 12),
+            Margin = new Padding(0, 0, 0, AppTheme.SpacingGap),
         };
         quickSetupLayout.Controls.Add(setupDescription, 0, 0);
         quickSetupLayout.SetColumnSpan(setupDescription, 4);
@@ -236,7 +241,7 @@ public sealed class MainForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             AutoSize = true,
             WrapContents = false,
-            Margin = new Padding(0, 12, 0, 0),
+            Margin = new Padding(0, AppTheme.SpacingGap, 0, 0),
         };
         _runSetupButton = new Button
         {
@@ -264,11 +269,10 @@ public sealed class MainForm : Form
 
         _uninstallButton = new Button
         {
-            Text = "Uninstall",
+            Text = "Restore && Uninstall",
             AutoSize = true,
-            ForeColor = Color.Firebrick,
         };
-        _uninstallButton.Click += async (_, _) => await UninstallAsync();
+        _uninstallButton.Click += async (_, _) => await RestoreAndUninstallAsync();
         setupButtonFlow.Controls.Add(_uninstallButton);
 
         quickSetupLayout.Controls.Add(setupButtonFlow, 0, 4);
@@ -278,16 +282,13 @@ public sealed class MainForm : Form
         {
             Text = "Output",
             Dock = DockStyle.Fill,
-            Padding = new Padding(8),
+            Padding = new Padding(AppTheme.SpacingSmall),
         };
         _setupOutputBox = new RichTextBox
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
-            BackColor = Color.FromArgb(28, 31, 36),
-            ForeColor = Color.Gainsboro,
             BorderStyle = BorderStyle.None,
-            Font = new Font("Consolas", 10.5f),
             WordWrap = false,
         };
         var outputMenu = new ContextMenuStrip();
@@ -310,7 +311,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 5,
-            Padding = new Padding(16),
+            Padding = new Padding(AppTheme.SpacingLarge),
         };
         statusLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         statusLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -354,7 +355,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 6,
-            Padding = new Padding(16),
+            Padding = new Padding(AppTheme.SpacingLarge),
         };
         updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         updatesLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -372,9 +373,6 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
-            Font = new Font("Consolas", 10),
-            BackColor = Color.FromArgb(28, 31, 36),
-            ForeColor = Color.Gainsboro,
             BorderStyle = BorderStyle.None,
         };
 
@@ -405,9 +403,6 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
-            Font = new Font("Consolas", 10),
-            BackColor = Color.FromArgb(28, 31, 36),
-            ForeColor = Color.Gainsboro,
             BorderStyle = BorderStyle.None,
             WordWrap = false,
         };
@@ -444,6 +439,18 @@ public sealed class MainForm : Form
 
         ConfigureToolTips();
 
+        _currentTheme = AppTheme.Detect();
+        ApplyTheme();
+        _themeSubscription = AppTheme.OnThemeChanged(this, () =>
+        {
+            var next = AppTheme.Detect();
+            if (next != _currentTheme)
+            {
+                _currentTheme = next;
+                ApplyTheme();
+            }
+        });
+
         Shown += async (_, _) => await OnShownAsync();
         FormClosing += OnFormClosing;
         FormClosed += (_, _) => RestoreConsoleOutput();
@@ -451,6 +458,11 @@ public sealed class MainForm : Form
 
     private async Task OnShownAsync()
     {
+        if (_startMinimized)
+        {
+            HideToTray();
+        }
+
         InstallManager.EnsureProgramDataLayout();
         _settings.InstallPath = InstallManager.CanonicalExePath;
         _settings.Save();
@@ -464,7 +476,7 @@ public sealed class MainForm : Form
         if (_settings.SetupCompletedUtc == null)
         {
             _complianceLabel.Text = "Setup has not been completed. Go to the Setup tab to configure this machine.";
-            _complianceLabel.ForeColor = Color.DarkGoldenrod;
+            _complianceLabel.ForeColor = _palette.LogWarn;
         }
 
         RefreshLogViewer();
@@ -607,11 +619,16 @@ public sealed class MainForm : Form
             });
     }
 
-    private async Task UninstallAsync()
+    private async Task RestoreAndUninstallAsync()
     {
         var confirm = MessageBox.Show(
-            "This will stop and remove the KeepAlive service. Continue?",
-            "Confirm Uninstall",
+            "This will:\n" +
+            "  - Stop and remove the KeepAlive service\n" +
+            "  - Restore all Windows settings to their original values\n" +
+            "  - Remove the startup task and desktop shortcut\n\n" +
+            "A reboot will be needed for all changes to take effect.\n\n" +
+            "Continue?",
+            "Confirm Restore & Uninstall",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question);
 
@@ -621,11 +638,18 @@ public sealed class MainForm : Form
         }
 
         await RunOperationAsync(
-            "Uninstalling service",
+            "Restoring settings and uninstalling",
             async () =>
             {
-                await Task.Run(ServiceInstaller.Uninstall);
-                Console.WriteLine("[OK] Uninstall flow completed.");
+                var exitCode = await Task.Run(RestoreManager.RunRestore);
+                if (exitCode == 0)
+                {
+                    Console.WriteLine("[OK] Restore and uninstall completed successfully.");
+                }
+                else
+                {
+                    Console.WriteLine("[WARN] Restore completed with some failures. Check output above.");
+                }
             });
     }
 
@@ -743,7 +767,7 @@ public sealed class MainForm : Form
         if (_settings.SetupCompletedUtc == null)
         {
             _complianceLabel.Text = "Setup has not been completed. Go to the Setup tab to configure this machine.";
-            _complianceLabel.ForeColor = Color.DarkGoldenrod;
+            _complianceLabel.ForeColor = _palette.LogWarn;
             return;
         }
 
@@ -774,7 +798,7 @@ public sealed class MainForm : Form
                 int exitCode;
                 try
                 {
-                    exitCode = await Task.Run(ComplianceChecker.RunCheck);
+                    exitCode = await Task.Run(() => ComplianceChecker.RunCheck());
                 }
                 finally
                 {
@@ -1167,10 +1191,10 @@ public sealed class MainForm : Form
             var total = passed + failed;
             _complianceLabel.Text = $"Compliance: {passed}/{total} passed ({warnings} warnings)";
             _complianceLabel.ForeColor = failed > 0
-                ? Color.Firebrick
+                ? _palette.LogFail
                 : warnings > 0
-                    ? Color.DarkGoldenrod
-                    : Color.ForestGreen;
+                    ? _palette.LogWarn
+                    : _palette.LogPass;
             return;
         }
 
@@ -1178,8 +1202,8 @@ public sealed class MainForm : Form
             ? "Compliance: Passed"
             : "Compliance: Failed";
         _complianceLabel.ForeColor = exitCode == 0
-            ? Color.ForestGreen
-            : Color.Firebrick;
+            ? _palette.LogPass
+            : _palette.LogFail;
     }
 
     private bool TryReadCredentials(out CredentialInfo? credentials, out string error)
@@ -1248,7 +1272,7 @@ public sealed class MainForm : Form
         _toolTip.SetToolTip(_runSetupButton, "Configures auto-login, power settings, Windows Update policy, and installs the KeepAlive service.");
         _toolTip.SetToolTip(_testCredentialsButton, "Validates your credentials without making any changes.");
         _toolTip.SetToolTip(_updatePasswordButton, "Changes only the auto-login password (leaves all other settings intact).");
-        _toolTip.SetToolTip(_uninstallButton, "Stops and removes the KeepAlive service (does not revert Windows settings).");
+        _toolTip.SetToolTip(_uninstallButton, "Restores all Windows settings to their original values, removes the service, startup task, and shortcuts.");
         _toolTip.SetToolTip(_runCheckButton, "Verifies all settings are correctly applied.");
         _toolTip.SetToolTip(_startServiceButton, "Start the KeepAlive Windows service.");
         _toolTip.SetToolTip(_stopServiceButton, "Stop the KeepAlive Windows service.");
@@ -1260,6 +1284,36 @@ public sealed class MainForm : Form
         _toolTip.SetToolTip(_showPasswordCheckBox, "Show or hide the password text.");
         _toolTip.SetToolTip(_domainTextBox, "Domain or machine name used for sign-in.");
         _toolTip.SetToolTip(_accountTypeComboBox, "Select how you sign into Windows.");
+    }
+
+    private void ApplyTheme()
+    {
+        _palette = AppTheme.GetPalette(_currentTheme);
+        AppTheme.Apply(this, _palette);
+
+        StyleButton(_runSetupButton, _palette.BtnPrimaryBack, _palette.BtnPrimaryFore);
+        StyleButton(_updateNowButton, _palette.BtnPrimaryBack, _palette.BtnPrimaryFore);
+        StyleButton(_uninstallButton, _palette.BtnDestructiveBack, _palette.BtnDestructiveFore);
+        StyleButton(_testCredentialsButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_updatePasswordButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_runCheckButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_startServiceButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_stopServiceButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_restartServiceButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+        StyleButton(_checkUpdatesButton, _palette.BtnSecondaryBack, _palette.BtnSecondaryFore);
+
+        _richTextWriter.SetLogColors(
+            _palette.LogFail, _palette.LogWarn, _palette.LogPass,
+            _palette.LogInfo, _palette.ConsoleFore);
+
+        static void StyleButton(Button btn, Color back, Color fore)
+        {
+            btn.FlatStyle = FlatStyle.Flat;
+            btn.BackColor = back;
+            btn.ForeColor = fore;
+            btn.FlatAppearance.BorderSize = 1;
+            btn.FlatAppearance.BorderColor = ControlPaint.Dark(back, 0.1f);
+        }
     }
 
     private void CopyOutputToClipboard()
@@ -1441,6 +1495,7 @@ public sealed class MainForm : Form
     private void RestoreConsoleOutput()
     {
         FlushPendingCredentialPersistence();
+        _themeSubscription?.Dispose();
         _updateTimer.Stop();
         _logTimer.Stop();
         _credentialPersistTimer.Stop();
