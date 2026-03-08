@@ -13,6 +13,8 @@ public sealed class WpfOutputWriter : TextWriter
     private const long MaxLogBytes = 5L * 1024L * 1024L;
     private const long RetainedLogBytes = MaxLogBytes / 2;
     private const int RotationCheckIntervalLines = 50;
+    private const int MaxUiLines = 5000;
+    private const int UiLineTrimCount = 1000;
 
     private readonly RichTextBox _outputBox;
     private readonly Paragraph _paragraph;
@@ -69,15 +71,33 @@ public sealed class WpfOutputWriter : TextWriter
         if (string.IsNullOrEmpty(value))
             return;
 
-        foreach (var ch in value)
-            Write(ch);
+        lock (_sync)
+        {
+            foreach (var ch in value)
+            {
+                if (ch == '\r') continue;
+                if (ch == '\n') { FlushBufferedLine(); continue; }
+                _buffer.Append(ch);
+            }
+        }
     }
 
     public override void WriteLine(string? value)
     {
-        if (!string.IsNullOrEmpty(value))
-            Write(value);
-        Write('\n');
+        lock (_sync)
+        {
+            if (!string.IsNullOrEmpty(value))
+            {
+                foreach (var ch in value)
+                {
+                    if (ch == '\r') continue;
+                    if (ch == '\n') { FlushBufferedLine(); continue; }
+                    _buffer.Append(ch);
+                }
+            }
+
+            FlushBufferedLine();
+        }
     }
 
     public override void Flush()
@@ -125,6 +145,12 @@ public sealed class WpfOutputWriter : TextWriter
     {
         try
         {
+            if (_paragraph.Inlines.Count >= MaxUiLines)
+            {
+                for (var i = 0; i < UiLineTrimCount && _paragraph.Inlines.FirstInline != null; i++)
+                    _paragraph.Inlines.Remove(_paragraph.Inlines.FirstInline);
+            }
+
             var brush = ResolveColor(line);
             var run = new Run(line + Environment.NewLine) { Foreground = brush };
             _paragraph.Inlines.Add(run);

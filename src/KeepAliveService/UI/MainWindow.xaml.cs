@@ -551,6 +551,8 @@ public sealed partial class MainWindow : FluentWindow
                 return;
         }
 
+        var shouldClose = false;
+
         await RunOperationAsync("Applying update", async () =>
         {
             var progress = new Progress<DownloadProgress>(p =>
@@ -577,9 +579,14 @@ public sealed partial class MainWindow : FluentWindow
                 "Update process has started. This window will close and relaunch after the update is applied.",
                 "Updating", MessageBoxButton.OK, MessageBoxImage.Information);
 
+            shouldClose = true;
+        });
+
+        if (shouldClose)
+        {
             _allowClose = true;
             Close();
-        });
+        }
     }
 
     private async Task PromptForStartupUpdateAsync(UpdateCheckResult result)
@@ -603,6 +610,7 @@ public sealed partial class MainWindow : FluentWindow
 
         _isOperationRunning = true;
         SetControlsEnabled(false);
+        var previousStatusText = UpdateStatusStrip.Text;
         UpdateStatusStrip.Text = $"{operationName}...";
 
         try
@@ -620,7 +628,9 @@ public sealed partial class MainWindow : FluentWindow
             SetControlsEnabled(true);
             RefreshServiceStatus();
             RefreshLogViewer();
-            UpdateStatusStrip.Text = "Update: idle";
+            UpdateStatusStrip.Text = _lastUpdateResult?.IsUpdateAvailable == true
+                ? $"Update available: v{FormatVersion(_lastUpdateResult.LatestVersion)}"
+                : previousStatusText;
             _isOperationRunning = false;
         }
     }
@@ -960,6 +970,9 @@ public sealed partial class MainWindow : FluentWindow
 
     public void ActivateFromExternalLaunch()
     {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
         if (!Dispatcher.CheckAccess())
         {
             try { Dispatcher.BeginInvoke(ActivateFromExternalLaunch); }
@@ -1003,7 +1016,11 @@ public sealed partial class MainWindow : FluentWindow
         _logTimer.Stop();
         _credentialPersistTimer.Stop();
         _trayIcon.Visible = false;
+        var trayIcon = _trayIcon.Icon;
         _trayIcon.Dispose();
+        if (trayIcon != null && trayIcon != System.Drawing.SystemIcons.Application)
+            trayIcon.Dispose();
+        _outputWriter.Flush();
         Console.SetOut(_originalConsoleOut);
         Console.SetError(_originalConsoleError);
         _updateChecker.Dispose();

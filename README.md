@@ -15,7 +15,7 @@ Turn any Windows laptop into an always-on, always-logged-in server. One self-con
 - **Compliance watchdog** — periodically verifies all settings and auto-remediates drift
 - **Auto-updates** — checks GitHub releases every 24 hours and applies in-place EXE updates
 - **Full restore** — backs up original settings before setup; one-click rollback to undo everything
-- **Auto light/dark theme** — follows your Windows appearance preference with live switching
+- **Modern Fluent Design GUI** — WPF interface with Mica backdrop and tabbed layout
 - **Windows 10 & 11 support** — Home, Pro, Enterprise, and Education editions
 
 ## Quick Start
