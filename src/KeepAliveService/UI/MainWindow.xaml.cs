@@ -8,7 +8,9 @@ using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Interop;
 using System.Windows.Threading;
+using KeepAliveService.Native;
 using KeepAliveService.Setup;
 using KeepAliveService.Update;
 using Wpf.Ui.Controls;
@@ -49,6 +51,8 @@ public sealed partial class MainWindow : FluentWindow
     private readonly bool _startMinimized;
     private bool _allowClose;
     private bool _trayHintShown;
+    private bool _isHiddenToTray;
+    private uint _taskbarCreatedMessageId;
     private bool _serviceInstalled;
     private ServiceControllerStatus? _currentServiceStatus;
     private long _lastLogLength = -1;
@@ -142,8 +146,16 @@ public sealed partial class MainWindow : FluentWindow
 
     private async Task OnLoadedAsync()
     {
+        // Install TaskbarCreated hook BEFORE showing the tray icon so we never
+        // miss the first recovery message if explorer finishes loading after us.
+        InstallTaskbarCreatedHook();
+
         if (_startMinimized)
         {
+            // Wait for the Windows shell to be ready before showing the tray icon.
+            // At logon the scheduled task can fire before explorer.exe has finished
+            // initializing the notification area, so the icon would be silently lost.
+            await WaitForShellReadyAsync();
             HideToTray();
         }
 
@@ -153,6 +165,9 @@ public sealed partial class MainWindow : FluentWindow
 
         LoadSavedCredentialInputs();
         RefreshSetupStatus();
+
+        // Auto-repair startup task if setup was completed but the task is missing/broken.
+        TryAutoRepairStartupTask();
 
         Console.WriteLine("[INFO] Windows Keep Alive GUI started.");
         Console.WriteLine($"[INFO] Install path: {InstallManager.CanonicalExePath}");
@@ -1028,9 +1043,95 @@ public sealed partial class MainWindow : FluentWindow
         return tray;
     }
 
+    private static async Task WaitForShellReadyAsync()
+    {
+        // Poll for explorer.exe — once it's running the notification area should be
+        // available (or will become available shortly after via TaskbarCreated).
+        const int maxWaitSeconds = 30;
+        for (var i = 0; i < maxWaitSeconds; i++)
+        {
+            try
+            {
+                var explorers = System.Diagnostics.Process.GetProcessesByName("explorer");
+                var found = explorers.Length > 0;
+                foreach (var p in explorers) p.Dispose();
+                if (found) return;
+            }
+            catch
+            {
+                // Best effort.
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1));
+        }
+
+        Console.WriteLine("[WARN] Shell readiness timeout — explorer.exe not detected after 30 s. Proceeding anyway.");
+    }
+
+    private void InstallTaskbarCreatedHook()
+    {
+        try
+        {
+            _taskbarCreatedMessageId = NativeMethods.RegisterWindowMessage("TaskbarCreated");
+            if (_taskbarCreatedMessageId != 0)
+            {
+                var hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+                hwndSource?.AddHook(WndProc);
+            }
+        }
+        catch
+        {
+            // Best effort — tray icon will still work, just won't survive explorer restarts.
+        }
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (_taskbarCreatedMessageId != 0 && msg == (int)_taskbarCreatedMessageId)
+        {
+            // Explorer has (re)created the taskbar. Re-show the tray icon only
+            // if we are actually hidden to tray (not just minimized normally).
+            // Toggle Visible off→on to force Shell_NotifyIcon(NIM_ADD)
+            // re-registration with the new shell.
+            if (_isHiddenToTray)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Visible = true;
+            }
+
+            handled = false;
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private void TryAutoRepairStartupTask()
+    {
+        try
+        {
+            if (_settings.SetupCompletedUtc == null || !IsRunningAsAdmin())
+                return;
+
+            var (exists, correct, detail) = StartupTaskManager.ValidateTask();
+            if (exists && correct)
+                return;
+
+            Console.WriteLine($"[INFO] Startup task needs repair: {detail ?? "missing"}. Re-creating...");
+            if (StartupTaskManager.EnsureTask())
+                Console.WriteLine("[INFO] Startup task repaired successfully.");
+            else
+                Console.WriteLine("[WARN] Startup task repair failed.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Startup task auto-repair failed: {ex.Message}");
+        }
+    }
+
     private void HideToTray()
     {
         Hide();
+        _isHiddenToTray = true;
         _trayIcon.Visible = true;
 
         if (!_trayHintShown)
@@ -1044,6 +1145,7 @@ public sealed partial class MainWindow : FluentWindow
 
     private void RestoreFromTray()
     {
+        _isHiddenToTray = false;
         ShowInTaskbar = true;
         Show();
         WindowState = WindowState.Normal;

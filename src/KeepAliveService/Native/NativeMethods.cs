@@ -21,4 +21,8 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AttachConsole(int dwProcessId);
+
+    [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW",
+        StringMarshalling = StringMarshalling.Utf16)]
+    public static partial uint RegisterWindowMessage(string lpString);
 }

@@ -488,23 +488,29 @@ public static class RestoreManager
             RunPowerCfg("/hibernate on", "Hibernation -> Enabled");
         }
 
-        // Lid close action (default: 1 = Sleep)
+        // Lid close action (default: 1 = Sleep) — use GUIDs, not aliases
+        const string subButtons = "4f971e89-eebd-4455-a8de-9e59040e7347";
+        const string lidAction = "5ca83367-6e45-459f-a27b-476b1d01c936";
         ok &= RestorePowerCfgIndex(backup, "power.lidaction-ac",
-            "/setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION", "Lid close (AC)", defaultValue: 1);
+            $"/setacvalueindex SCHEME_CURRENT {subButtons} {lidAction}", "Lid close (AC)", defaultValue: 1);
         ok &= RestorePowerCfgIndex(backup, "power.lidaction-dc",
-            "/setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION", "Lid close (DC)", defaultValue: 1);
+            $"/setdcvalueindex SCHEME_CURRENT {subButtons} {lidAction}", "Lid close (DC)", defaultValue: 1);
 
         // Hybrid sleep (default: 1 = Enabled)
+        const string subSleep = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
+        const string hybridSleep = "94ac6d29-73ce-41a6-809f-6363ba21b47e";
         ok &= RestorePowerCfgIndex(backup, "power.hybridsleep-ac",
-            "/setacvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP", "Hybrid sleep (AC)", defaultValue: 1);
+            $"/setacvalueindex SCHEME_CURRENT {subSleep} {hybridSleep}", "Hybrid sleep (AC)", defaultValue: 1);
         ok &= RestorePowerCfgIndex(backup, "power.hybridsleep-dc",
-            "/setdcvalueindex SCHEME_CURRENT SUB_SLEEP HYBRIDSLEEP", "Hybrid sleep (DC)", defaultValue: 1);
+            $"/setdcvalueindex SCHEME_CURRENT {subSleep} {hybridSleep}", "Hybrid sleep (DC)", defaultValue: 1);
 
         // Console lock on wake (default: 1 = Enabled)
+        const string subNone = "fea3413e-7e05-4911-9a71-700331f1c294";
+        const string consoleLock = "0e796bdb-100d-47d6-a2d5-f7d2daa51f51";
         ok &= RestorePowerCfgIndex(backup, "power.consolelock-ac",
-            "/setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK", "Sign-in after sleep (AC)", defaultValue: 1);
+            $"/setacvalueindex SCHEME_CURRENT {subNone} {consoleLock}", "Sign-in after sleep (AC)", defaultValue: 1);
         ok &= RestorePowerCfgIndex(backup, "power.consolelock-dc",
-            "/setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK", "Sign-in after sleep (DC)", defaultValue: 1);
+            $"/setdcvalueindex SCHEME_CURRENT {subNone} {consoleLock}", "Sign-in after sleep (DC)", defaultValue: 1);
 
         // WiFi power saving (default: 3 = Medium Power Saving)
         ok &= RestorePowerCfgIndex(backup, "power.wifi-powersave-ac",
@@ -521,6 +527,9 @@ public static class RestoreManager
         ok &= RestorePowerCfgIndex(backup, "power.usb-suspend-dc",
             "/setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226",
             "USB selective suspend (DC)", defaultValue: 1);
+
+        // Flush all index changes to the kernel by re-activating the current scheme.
+        ok &= RunPowerCfg("/setactive SCHEME_CURRENT", "Activate power scheme to apply restored settings");
 
         return ok;
     }
