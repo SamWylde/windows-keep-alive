@@ -79,7 +79,8 @@ public static class SetupManager
             _criticalFailures++;
 
         // Step 5.5: Register startup task (GUI auto-start at logon)
-        TryRun("Startup task", StartupTaskManager.EnsureTask);
+        if (!TryRun("Startup task", StartupTaskManager.EnsureTask))
+            _criticalFailures++;
 
         // Step 6: Run compliance check to verify everything was applied correctly
         Console.WriteLine();
