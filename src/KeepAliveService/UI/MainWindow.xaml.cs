@@ -50,6 +50,8 @@ public sealed partial class MainWindow : FluentWindow
     private bool _startupUpdatePromptShown;
     private readonly bool _startMinimized;
     private bool _allowClose;
+    private bool _settingsPersistenceDisabled;
+    private bool _applicationUninstalled;
     private bool _trayHintShown;
     private bool _isHiddenToTray;
     private uint _taskbarCreatedMessageId;
@@ -106,6 +108,12 @@ public sealed partial class MainWindow : FluentWindow
             _credentialPersistTimer.Stop();
             PersistCredentialInputs();
         };
+
+        ModeBox.Items.Add(new ModeOption("Keep awake only", KeepAliveMode.KeepAwakeOnly));
+        ModeBox.Items.Add(new ModeOption("Keep awake + remote access watchdog", KeepAliveMode.RemoteAccessWatchdog));
+        ModeBox.Items.Add(new ModeOption("Full unattended auto-login", KeepAliveMode.FullUnattended));
+        SelectMode(_settings.GetOperationMode());
+        ApplyModeUiState();
 
         // Account type combo (fires SelectionChanged → Credential_Changed → QueueCredentialPersistence)
         _suppressCredentialPersistence = true;
@@ -199,26 +207,36 @@ public sealed partial class MainWindow : FluentWindow
 
     private async Task RunSetupAsync()
     {
-        if (!TryReadCredentials(out var credentials, out var validationError))
+        var mode = SelectedMode;
+        CredentialInfo? credentials = null;
+
+        if (mode.UsesAutoLogin() && !TryReadCredentials(out credentials, out var validationError))
         {
             MessageBox.Show(this, validationError, "Invalid Input", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
+        }
+        else if (!mode.UsesAutoLogin())
+        {
+            FlushPendingCredentialPersistence();
         }
 
         await RunOperationAsync(
             "Running setup",
             async () =>
             {
-                var exitCode = await Task.Run(() => SetupManager.RunSetup(credentials!));
+                var exitCode = await Task.Run(() => SetupManager.RunSetup(mode, credentials));
                 if (exitCode == 0)
                 {
+                    _settings.SetOperationMode(mode);
                     _settings.SetupCompletedUtc = DateTime.UtcNow;
                     try { _settings.Save(); }
                     catch { /* Best effort */ }
+                    SyncInMemorySetupState(AppSettings.Load());
                     Console.WriteLine("[OK] Setup completed successfully.");
                 }
                 else
                 {
+                    SyncInMemorySetupState(AppSettings.Load());
                     Console.WriteLine("[FAIL] Setup finished with one or more failures.");
                 }
             });
@@ -323,6 +341,10 @@ public sealed partial class MainWindow : FluentWindow
             async () =>
             {
                 var exitCode = await Task.Run(RestoreManager.RunRestore);
+                if (exitCode == 0)
+                {
+                    ResetInMemorySetupState();
+                }
                 Console.WriteLine(exitCode == 0
                     ? "[OK] Settings restored. The program is still installed — you can re-run setup at any time."
                     : "[WARN] Restore completed with some failures. Check output above.");
@@ -349,6 +371,14 @@ public sealed partial class MainWindow : FluentWindow
             async () =>
             {
                 var exitCode = await Task.Run(RestoreManager.RunUninstall);
+                if (exitCode == 0)
+                {
+                    ResetInMemorySetupState();
+                    _settingsPersistenceDisabled = true;
+                    _applicationUninstalled = true;
+                    _logTimer.Stop();
+                    _updateTimer.Stop();
+                }
                 Console.WriteLine(exitCode == 0
                     ? "[OK] Uninstall completed. You can close this window."
                     : "[WARN] Uninstall completed with some failures. Check output above.");
@@ -694,19 +724,36 @@ public sealed partial class MainWindow : FluentWindow
         finally
         {
             _isOperationRunning = false;
-            SetControlsEnabled(true);
             RefreshServiceStatus();
-            RefreshSetupStatus();
-            RefreshLogViewer();
-            UpdateStatusStrip.Text = _lastUpdateResult?.IsUpdateAvailable == true
-                ? $"Update available: v{FormatVersion(_lastUpdateResult.LatestVersion)}"
-                : previousStatusText;
+
+            if (_applicationUninstalled)
+            {
+                SetControlsEnabled(false);
+                SetupStatusLabel.Text = "Status: Uninstalled - close this window to finish.";
+                SetupStatusLabel.Foreground = Brushes.DarkGoldenrod;
+                UpdateStatusStrip.Text = "Uninstalled";
+            }
+            else
+            {
+                SetControlsEnabled(true);
+                RefreshSetupStatus();
+                RefreshLogViewer();
+                UpdateStatusStrip.Text = _lastUpdateResult?.IsUpdateAvailable == true
+                    ? $"Update available: v{FormatVersion(_lastUpdateResult.LatestVersion)}"
+                    : previousStatusText;
+            }
         }
     }
 
     // ───────────────────── Credentials ─────────────────────
 
     private void Credential_Changed(object sender, EventArgs e) => QueueCredentialPersistence();
+
+    private void Mode_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        ApplyModeUiState();
+    }
+
     private void Password_Changed(object sender, RoutedEventArgs e)
     {
         _passwordDecryptFailed = false;
@@ -716,6 +763,7 @@ public sealed partial class MainWindow : FluentWindow
     private void AccountType_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         ApplyAccountTypeDefaults();
+        ApplyModeUiState();
         QueueCredentialPersistence();
     }
 
@@ -740,6 +788,11 @@ public sealed partial class MainWindow : FluentWindow
     private string CurrentPassword => ShowPasswordCheck.IsChecked == true
         ? PasswordVisible.Text
         : PasswordHidden.Password;
+
+    private KeepAliveMode SelectedMode =>
+        ModeBox.SelectedItem is ModeOption option
+            ? option.Mode
+            : KeepAliveMode.KeepAwakeOnly;
 
     private bool TryReadCredentials(out CredentialInfo? credentials, out string error)
     {
@@ -799,6 +852,35 @@ public sealed partial class MainWindow : FluentWindow
         }
     }
 
+    private void ApplyModeUiState()
+    {
+        var mode = SelectedMode;
+        var usesAutoLogin = mode.UsesAutoLogin();
+
+        UsernameBox.IsEnabled = usesAutoLogin;
+        AccountTypeBox.IsEnabled = usesAutoLogin;
+        DomainBox.IsEnabled = usesAutoLogin &&
+                              AccountTypeBox.SelectedItem is AccountTypeOption option &&
+                              option.Type != AccountType.MicrosoftAccount;
+        PasswordHidden.IsEnabled = usesAutoLogin;
+        PasswordVisible.IsEnabled = usesAutoLogin;
+        ShowPasswordCheck.IsEnabled = usesAutoLogin;
+
+        ModeWarningText.Text = mode switch
+        {
+            KeepAliveMode.KeepAwakeOnly =>
+                "Only power settings and the keep-awake service will be configured.",
+            KeepAliveMode.RemoteAccessWatchdog =>
+                "Adds TeamViewer monitoring and network power hardening. Auto-login stays untouched.",
+            KeepAliveMode.FullUnattended =>
+                "Configures auto-login, lock-screen policy, Windows Update policy, network hardening, and TeamViewer monitoring.",
+            _ => string.Empty,
+        };
+
+        TestCredentialsButton.IsEnabled = !_isOperationRunning && usesAutoLogin;
+        UpdatePasswordButton.IsEnabled = !_isOperationRunning && usesAutoLogin;
+    }
+
     private void QueueCredentialPersistence()
     {
         if (_suppressCredentialPersistence || _credentialPersistTimer == null)
@@ -809,6 +891,9 @@ public sealed partial class MainWindow : FluentWindow
 
     private void FlushPendingCredentialPersistence()
     {
+        if (_settingsPersistenceDisabled)
+            return;
+
         if (_credentialPersistTimer.IsEnabled)
             _credentialPersistTimer.Stop();
         PersistCredentialInputs();
@@ -842,11 +927,12 @@ public sealed partial class MainWindow : FluentWindow
         }
 
         PersistCredentialInputs();
+        ApplyModeUiState();
     }
 
     private void PersistCredentialInputs()
     {
-        if (_suppressCredentialPersistence)
+        if (_suppressCredentialPersistence || _settingsPersistenceDisabled)
             return;
 
         try
@@ -882,6 +968,39 @@ public sealed partial class MainWindow : FluentWindow
                 return;
             }
         }
+    }
+
+    private void SelectMode(KeepAliveMode mode)
+    {
+        for (var i = 0; i < ModeBox.Items.Count; i++)
+        {
+            if (ModeBox.Items[i] is ModeOption option && option.Mode == mode)
+            {
+                ModeBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
+    private void ResetInMemorySetupState()
+    {
+        _settings.SetupCompletedUtc = null;
+        _settings.OriginalSettingsBackup = null;
+        _settings.StartupTaskUser = null;
+        _settings.SetOperationMode(KeepAliveMode.KeepAwakeOnly);
+        SelectMode(KeepAliveMode.KeepAwakeOnly);
+        ApplyModeUiState();
+    }
+
+    private void SyncInMemorySetupState(AppSettings current)
+    {
+        var mode = current.GetOperationMode();
+        _settings.SetupCompletedUtc = current.SetupCompletedUtc;
+        _settings.OriginalSettingsBackup = current.OriginalSettingsBackup;
+        _settings.StartupTaskUser = current.StartupTaskUser;
+        _settings.SetOperationMode(mode);
+        SelectMode(mode);
+        ApplyModeUiState();
     }
 
     // ───────────────────── Service status ─────────────────────
@@ -1112,12 +1231,13 @@ public sealed partial class MainWindow : FluentWindow
             if (_settings.SetupCompletedUtc == null || !IsRunningAsAdmin())
                 return;
 
-            var (exists, correct, detail) = StartupTaskManager.ValidateTask();
+            var mode = _settings.GetOperationMode();
+            var (exists, correct, detail) = StartupTaskManager.ValidateTask(mode);
             if (exists && correct)
                 return;
 
             Console.WriteLine($"[INFO] Startup task needs repair: {detail ?? "missing"}. Re-creating...");
-            if (StartupTaskManager.EnsureTask())
+            if (StartupTaskManager.EnsureTask(mode))
                 Console.WriteLine("[INFO] Startup task repaired successfully.");
             else
                 Console.WriteLine("[WARN] Startup task repair failed.");
@@ -1215,9 +1335,10 @@ public sealed partial class MainWindow : FluentWindow
 
     private void SetControlsEnabled(bool enabled)
     {
+        ModeBox.IsEnabled = enabled;
         RunSetupButton.IsEnabled = enabled;
-        TestCredentialsButton.IsEnabled = enabled;
-        UpdatePasswordButton.IsEnabled = enabled;
+        TestCredentialsButton.IsEnabled = enabled && SelectedMode.UsesAutoLogin();
+        UpdatePasswordButton.IsEnabled = enabled && SelectedMode.UsesAutoLogin();
         RestoreButton.IsEnabled = enabled;
         UninstallButton.IsEnabled = enabled;
         RunCheckButton.IsEnabled = enabled;
@@ -1232,23 +1353,24 @@ public sealed partial class MainWindow : FluentWindow
             return;
         }
 
+        ApplyModeUiState();
         ApplyServiceButtonState();
     }
 
     private void RefreshSetupStatus()
     {
         // Reload from disk in case setup/restore/uninstall changed the state
-        var current = AppSettings.Load();
+        var current = AppSettings.Load(createIfMissing: !_applicationUninstalled);
 
         if (current.SetupCompletedUtc != null)
         {
             var completed = current.SetupCompletedUtc.Value.ToLocalTime();
-            SetupStatusLabel.Text = $"Status: Active — setup completed {completed:yyyy-MM-dd HH:mm}";
+            SetupStatusLabel.Text = $"Status: Active - {current.GetOperationMode().ToDisplayName()} setup completed {completed:yyyy-MM-dd HH:mm}";
             SetupStatusLabel.Foreground = Brushes.ForestGreen;
         }
         else
         {
-            SetupStatusLabel.Text = "Status: Not configured — enter your credentials and click Run Setup to get started.";
+            SetupStatusLabel.Text = "Status: Not configured - choose a mode and click Run Setup to get started.";
             SetupStatusLabel.Foreground = Brushes.DarkGoldenrod;
         }
     }
@@ -1322,6 +1444,13 @@ public sealed partial class MainWindow : FluentWindow
     {
         public string Name { get; } = name;
         public AccountType Type { get; } = type;
+        public override string ToString() => Name;
+    }
+
+    private sealed class ModeOption(string name, KeepAliveMode mode)
+    {
+        public string Name { get; } = name;
+        public KeepAliveMode Mode { get; } = mode;
         public override string ToString() => Name;
     }
 

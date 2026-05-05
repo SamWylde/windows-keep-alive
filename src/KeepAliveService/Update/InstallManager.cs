@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using KeepAliveService.Native;
 
 namespace KeepAliveService.Update;
 
@@ -145,35 +146,33 @@ public static class InstallManager
             StringComparison.OrdinalIgnoreCase);
     }
 
-    public static void RemoveInstalledFiles()
+    public static bool RemoveInstalledFiles()
     {
         var installDir = CanonicalInstallDirectory;
-        if (!Directory.Exists(installDir)) return;
+        if (!Directory.Exists(installDir)) return true;
 
-        // Delete the EXE first. If we're running from the canonical path,
-        // the OS will keep it locked until process exit — best effort.
-        try
+        var ok = true;
+        var exePath = CanonicalExePath;
+        if (File.Exists(exePath) && !DeleteOrScheduleDelete(exePath, "installed EXE"))
         {
-            var exePath = CanonicalExePath;
-            if (File.Exists(exePath))
-                File.Delete(exePath);
-        }
-        catch
-        {
-            // May be locked by the running process — will be cleaned up on next boot.
+            ok = false;
         }
 
-        // Try to remove the directory. If the EXE is locked, this will fail
-        // but that's acceptable — the directory will be mostly empty.
         try
         {
             if (Directory.Exists(installDir))
                 Directory.Delete(installDir, recursive: true);
         }
-        catch
+        catch (Exception ex)
         {
-            // Best effort — directory may contain the running EXE.
+            Console.WriteLine($"[WARN] Could not remove install directory now: {ex.Message}");
+            if (!ScheduleDeleteOnReboot(installDir, "install directory"))
+            {
+                ok = false;
+            }
         }
+
+        return ok;
     }
 
     public static void RemoveDesktopShortcut()
@@ -217,6 +216,41 @@ public static class InstallManager
         catch
         {
             // Best effort only.
+        }
+    }
+
+    private static bool DeleteOrScheduleDelete(string path, string description)
+    {
+        try
+        {
+            File.Delete(path);
+            Console.WriteLine($"[OK] Removed {description}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Could not remove {description} now: {ex.Message}");
+            return ScheduleDeleteOnReboot(path, description);
+        }
+    }
+
+    private static bool ScheduleDeleteOnReboot(string path, string description)
+    {
+        try
+        {
+            if (NativeMethods.MoveFileEx(path, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT))
+            {
+                Console.WriteLine($"[OK] Scheduled {description} for removal on next reboot");
+                return true;
+            }
+
+            Console.WriteLine($"[WARN] Could not schedule {description} removal on reboot (Win32 error {Marshal.GetLastWin32Error()})");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Could not schedule {description} removal on reboot: {ex.Message}");
+            return false;
         }
     }
 

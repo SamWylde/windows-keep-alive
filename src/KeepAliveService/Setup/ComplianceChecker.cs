@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.ServiceProcess;
+using KeepAliveService.Update;
 using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
@@ -13,7 +14,7 @@ public static class ComplianceChecker
     [ThreadStatic] private static bool _isWindows10;
     [ThreadStatic] private static bool _isWindows11;
 
-    public static int RunCheck(bool includeStartupTask = true)
+    public static int RunCheck(KeepAliveMode? mode = null, bool includeStartupTask = true)
     {
         _passCount = 0;
         _failCount = 0;
@@ -21,22 +22,43 @@ public static class ComplianceChecker
         _isHomeOrCore = false;
         _isWindows10 = false;
         _isWindows11 = false;
+        var resolvedMode = mode ?? AppSettings.Load().GetOperationMode();
 
         Console.WriteLine();
         Console.WriteLine("========================================");
         Console.WriteLine("  KeepAlive Compliance Check");
         Console.WriteLine("========================================");
+        Console.WriteLine($"  Mode: {resolvedMode.ToDisplayName()}");
 
         CheckWindowsEdition();
-        CheckUpdatePolicy();
-        CheckAutoLogin();
-        CheckArso();
-        CheckLockScreen();
+        if (resolvedMode.UsesWindowsUpdatePolicy())
+            CheckUpdatePolicy();
+        else
+            SkipSection("Windows Update Policy", "Not enabled in this mode.");
+
+        if (resolvedMode.UsesAutoLogin())
+        {
+            CheckAutoLogin();
+            CheckArso();
+            CheckLockScreen();
+        }
+        else
+        {
+            SkipSection("Auto-Login", "Not enabled in this mode.");
+        }
+
         CheckPowerSettings();
-        CheckNetworkSettings();
+        if (resolvedMode.UsesNetworkHardening())
+            CheckNetworkSettings();
+        else
+            SkipSection("Network", "Not enabled in this mode.");
+
         CheckService();
-        if (includeStartupTask) CheckStartupTask();
-        CheckTeamViewer();
+        if (includeStartupTask) CheckStartupTask(resolvedMode);
+        if (resolvedMode.UsesRemoteAccessWatchdog())
+            CheckTeamViewer();
+        else
+            SkipSection("TeamViewer", "Not enabled in this mode.");
 
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -552,12 +574,12 @@ public static class ComplianceChecker
         }
     }
 
-    private static void CheckStartupTask()
+    private static void CheckStartupTask(KeepAliveMode mode)
     {
         Console.WriteLine();
         Console.WriteLine("--- Startup Task ---");
 
-        var (exists, correct, detail) = StartupTaskManager.ValidateTask();
+        var (exists, correct, detail) = StartupTaskManager.ValidateTask(mode);
         if (exists && correct)
         {
             Pass("Startup task present and correctly configured");
@@ -672,6 +694,16 @@ public static class ComplianceChecker
         _warnCount++;
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.Write("  [WARN] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+
+    private static void SkipSection(string sectionName, string message)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"--- {sectionName} ---");
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write("  [INFO] ");
         Console.ResetColor();
         Console.WriteLine(message);
     }

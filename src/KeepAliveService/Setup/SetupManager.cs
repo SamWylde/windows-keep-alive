@@ -13,15 +13,25 @@ public static class SetupManager
 
     public static int RunSetup()
     {
-        return RunSetupInternal(credentials: null, skipAdminPrompt: false);
+        return RunSetupInternal(KeepAliveMode.FullUnattended, credentials: null, skipAdminPrompt: false);
+    }
+
+    public static int RunSetup(KeepAliveMode mode)
+    {
+        return RunSetupInternal(mode, credentials: null, skipAdminPrompt: false);
     }
 
     public static int RunSetup(CredentialInfo credentials)
     {
-        return RunSetupInternal(credentials, skipAdminPrompt: true);
+        return RunSetupInternal(KeepAliveMode.FullUnattended, credentials, skipAdminPrompt: true);
     }
 
-    private static int RunSetupInternal(CredentialInfo? credentials, bool skipAdminPrompt)
+    public static int RunSetup(KeepAliveMode mode, CredentialInfo? credentials)
+    {
+        return RunSetupInternal(mode, credentials, skipAdminPrompt: true);
+    }
+
+    private static int RunSetupInternal(KeepAliveMode mode, CredentialInfo? credentials, bool skipAdminPrompt)
     {
         _criticalFailures = 0;
 
@@ -29,6 +39,11 @@ public static class SetupManager
         Console.WriteLine("========================================");
         Console.WriteLine("  Windows Keep Alive - Setup");
         Console.WriteLine("========================================");
+        Console.WriteLine($"  Mode: {mode.ToDisplayName()}");
+
+        var settings = AppSettings.Load();
+        var previousMode = settings.GetOperationMode();
+        var setupWasCompleted = settings.SetupCompletedUtc != null;
 
         // Backup current settings BEFORE preflight, because preflight may
         // mutate registry state (LegalNotice, DontDisplayLastUserName,
@@ -39,7 +54,6 @@ public static class SetupManager
         {
             try
             {
-                var settings = AppSettings.Load();
                 RestoreManager.BackupCurrentSettings(settings);
             }
             catch (Exception ex)
@@ -49,19 +63,47 @@ public static class SetupManager
         }
 
         // Step 0: Preflight checks
-        if (!RunPreflightChecks(skipAdminPrompt))
+        if (!RunPreflightChecks(mode, skipAdminPrompt))
         {
             return 1;
         }
 
+        if (setupWasCompleted && previousMode != mode)
+        {
+            if (!TryRun("Mode downgrade cleanup",
+                    () => RestoreManager.RestoreSettingsNotUsedByMode(previousMode, mode, settings.OriginalSettingsBackup)))
+            {
+                _criticalFailures++;
+                TryMarkSetupIncompleteAfterFailure();
+                ConsoleOutput.Error("Mode change cleanup failed. Setup stopped so the applied mode does not drift from Windows settings.");
+                PrintSummary(mode);
+                return 1;
+            }
+        }
+
         // Step 1: Windows Update policy
-        if (!TryRun("Windows Update policy", UpdatePolicyConfigurator.Configure))
-            _criticalFailures++;
+        if (mode.UsesWindowsUpdatePolicy())
+        {
+            if (!TryRun("Windows Update policy", UpdatePolicyConfigurator.Configure))
+                _criticalFailures++;
+        }
+        else
+        {
+            ConsoleOutput.Info("Windows Update policy -> Skipped for this mode");
+        }
 
         // Step 2: Auto-login + ARSO + lock screen
-        var autoLogonConfigured = credentials == null
-            ? TryRun("Auto-login configuration", AutoLogonConfigurator.Configure)
-            : TryRun("Auto-login configuration", () => AutoLogonConfigurator.Configure(credentials));
+        var autoLogonConfigured = true;
+        if (mode.UsesAutoLogin())
+        {
+            autoLogonConfigured = credentials == null
+                ? TryRun("Auto-login configuration", AutoLogonConfigurator.Configure)
+                : TryRun("Auto-login configuration", () => AutoLogonConfigurator.Configure(credentials));
+        }
+        else
+        {
+            ConsoleOutput.Info("Auto-login configuration -> Skipped for this mode");
+        }
 
         if (!autoLogonConfigured)
             _criticalFailures++;
@@ -72,20 +114,37 @@ public static class SetupManager
 
         // Step 4: Network / WiFi
         // Best effort: any missed required values are surfaced by the post-setup compliance check.
-        TryRun("Network configuration", NetworkConfigurator.Configure);
+        if (mode.UsesNetworkHardening())
+        {
+            TryRun("Network configuration", NetworkConfigurator.Configure);
+        }
+        else
+        {
+            ConsoleOutput.Info("Network configuration -> Skipped for this mode");
+        }
 
         // Step 5: Install self as service
+        // Persist the mode immediately before service installation so the service
+        // registers the correct workers when ServiceInstaller starts it. If a later
+        // step fails, setup is marked incomplete instead of claiming an older
+        // installation is still fully applied.
+        TryPersistOperationMode(mode);
         if (!TryRun("Service installation", ServiceInstaller.Install))
             _criticalFailures++;
 
         // Step 5.5: Register startup task (GUI auto-start at logon)
-        if (!TryRun("Startup task", StartupTaskManager.EnsureTask))
+        if (!TryRun("Startup task", () => StartupTaskManager.EnsureTask(mode)))
             _criticalFailures++;
+
+        if (mode.UsesRemoteAccessWatchdog())
+        {
+            WaitForTeamViewerWatchdogStartup();
+        }
 
         // Step 6: Run compliance check to verify everything was applied correctly
         Console.WriteLine();
         Console.WriteLine("=== Post-Setup Verification ===");
-        var complianceResult = ComplianceChecker.RunCheck();
+        var complianceResult = ComplianceChecker.RunCheck(mode);
         if (complianceResult != 0)
         {
             ConsoleOutput.Error("Post-setup verification failed. The system is not fully compliant.");
@@ -94,11 +153,15 @@ public static class SetupManager
 
         if (_criticalFailures == 0)
         {
-            TryPersistSetupCompletedTimestamp();
+            TryPersistSetupCompletedTimestamp(mode);
+        }
+        else
+        {
+            TryMarkSetupIncompleteAfterFailure();
         }
 
         // Summary - conditional on success/failure
-        PrintSummary();
+        PrintSummary(mode);
 
         return _criticalFailures > 0 ? 1 : 0;
     }
@@ -116,11 +179,26 @@ public static class SetupManager
         }
     }
 
-    private static void TryPersistSetupCompletedTimestamp()
+    private static void TryPersistOperationMode(KeepAliveMode mode)
     {
         try
         {
             var settings = AppSettings.Load();
+            settings.SetOperationMode(mode);
+            settings.Save();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
+    private static void TryPersistSetupCompletedTimestamp(KeepAliveMode mode)
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            settings.SetOperationMode(mode);
             settings.SetupCompletedUtc = DateTime.UtcNow;
             settings.Save();
         }
@@ -130,7 +208,24 @@ public static class SetupManager
         }
     }
 
-    public static bool RunPreflightChecks(bool skipAdminPrompt = false)
+    private static void TryMarkSetupIncompleteAfterFailure()
+    {
+        try
+        {
+            var settings = AppSettings.Load();
+            settings.SetOperationMode(KeepAliveMode.KeepAwakeOnly);
+            settings.StartupTaskUser = null;
+            settings.SetupCompletedUtc = null;
+            settings.Save(preserveConcurrentSetupState: false);
+            ConsoleOutput.Info("Setup did not complete; cleared setup-completed state in app settings.");
+        }
+        catch (Exception ex)
+        {
+            ConsoleOutput.Warning($"Could not clear setup-completed state after setup failure: {ex.Message}");
+        }
+    }
+
+    public static bool RunPreflightChecks(KeepAliveMode mode, bool skipAdminPrompt = false)
     {
         Console.WriteLine();
         Console.WriteLine("=== Preflight Checks ===");
@@ -151,7 +246,7 @@ public static class SetupManager
 
                 if (response == "y" || response == "yes")
                 {
-                    TrySelfElevate();
+                    TrySelfElevate(mode);
                 }
             }
 
@@ -165,27 +260,30 @@ public static class SetupManager
             return false;
         }
 
-        // Check TeamViewer is installed
-        if (!CheckTeamViewerInstalled())
+        // Check TeamViewer is installed when the selected mode will monitor it.
+        if (mode.UsesRemoteAccessWatchdog() && !CheckTeamViewerInstalled())
         {
             return false;
         }
 
         // Check for auto-login blockers and auto-fix if possible.
-        if (!CheckBlockers())
+        if (mode.UsesAutoLogin() && !CheckBlockers())
         {
             return false;
         }
 
         // Check for Credential Guard and auto-disable via registry when possible.
-        CheckCredentialGuard();
+        if (mode.UsesAutoLogin())
+        {
+            CheckCredentialGuard();
+        }
 
         return true;
     }
 
     private static bool IsRunningAsAdmin() => Helpers.IsRunningAsAdmin();
 
-    private static void TrySelfElevate()
+    private static void TrySelfElevate(KeepAliveMode mode)
     {
         try
         {
@@ -195,7 +293,7 @@ public static class SetupManager
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
-                Arguments = "--setup",
+                Arguments = $"--setup --mode {mode.ToSettingsValue()}",
                 Verb = "runas",
                 UseShellExecute = true,
             };
@@ -315,6 +413,53 @@ public static class SetupManager
         Console.WriteLine("    Download from: https://www.teamviewer.com/en/download/");
         Console.WriteLine("    The watchdog cannot guarantee TeamViewer availability without it.");
         return false;
+    }
+
+    private static void WaitForTeamViewerWatchdogStartup()
+    {
+        ConsoleOutput.Info("Waiting for TeamViewer watchdog to settle...");
+
+        var deadline = DateTime.UtcNow.AddSeconds(45);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (IsTeamViewerRunning())
+            {
+                ConsoleOutput.Success("TeamViewer is running");
+                return;
+            }
+
+            Thread.Sleep(3000);
+        }
+
+        ConsoleOutput.Warning("TeamViewer is still not running after waiting; compliance check will report the final status.");
+    }
+
+    private static bool IsTeamViewerRunning()
+    {
+        try
+        {
+            using var sc = new ServiceController("TeamViewer");
+            if (sc.Status == ServiceControllerStatus.Running)
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Service may not be installed; fall back to process checks.
+        }
+
+        var serviceProcs = Process.GetProcessesByName("TeamViewer_Service");
+        var uiProcs = Process.GetProcessesByName("TeamViewer");
+        try
+        {
+            return serviceProcs.Length > 0 || uiProcs.Length > 0;
+        }
+        finally
+        {
+            foreach (var process in serviceProcs) process.Dispose();
+            foreach (var process in uiProcs) process.Dispose();
+        }
     }
 
     private static bool CheckBlockers()
@@ -481,7 +626,7 @@ public static class SetupManager
         }
     }
 
-    private static void PrintSummary()
+    private static void PrintSummary(KeepAliveMode mode)
     {
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -505,24 +650,34 @@ public static class SetupManager
             Console.WriteLine("========================================");
             Console.WriteLine();
             Console.WriteLine("  What was configured:");
-            Console.WriteLine("    - Windows Update: auto-restart blocked when logged in");
-            Console.WriteLine("    - Auto-login: credentials stored encrypted via Autologon");
-            Console.WriteLine("    - ARSO: Windows will auto-sign-in after update reboots");
-            Console.WriteLine("    - Lock screen: disabled");
+            Console.WriteLine($"    - Mode: {mode.ToDisplayName()}");
             Console.WriteLine("    - Power: sleep/hibernate/lid-close all set to never/do nothing");
-            Console.WriteLine("    - WiFi: power saving set to Maximum Performance");
+            if (mode.UsesWindowsUpdatePolicy())
+                Console.WriteLine("    - Windows Update: auto-restart blocked when logged in");
+            if (mode.UsesAutoLogin())
+            {
+                Console.WriteLine("    - Auto-login: credentials stored encrypted via Autologon");
+                Console.WriteLine("    - ARSO: Windows will auto-sign-in after update reboots");
+                Console.WriteLine("    - Lock screen: disabled");
+            }
+            if (mode.UsesNetworkHardening())
+                Console.WriteLine("    - WiFi: power saving set to Maximum Performance");
             Console.WriteLine("    - KeepAlive service: installed, running, auto-start");
             Console.WriteLine("    - Startup task: GUI auto-launches at logon (minimized to tray)");
             Console.WriteLine();
             Console.WriteLine("  The KeepAlive service is now:");
-            Console.WriteLine("    - Preventing system sleep via SetThreadExecutionState API");
-            Console.WriteLine("    - Watching TeamViewer and restarting it if it stops");
+            Console.WriteLine("    - Preventing system sleep via Windows power requests");
+            if (mode.UsesRemoteAccessWatchdog())
+                Console.WriteLine("    - Watching TeamViewer and restarting it if it stops");
         }
 
         Console.WriteLine();
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("  IMPORTANT: Restart your PC to verify auto-login works!");
-        Console.ResetColor();
+        if (mode.UsesAutoLogin())
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  IMPORTANT: Restart your PC to verify auto-login works!");
+            Console.ResetColor();
+        }
         Console.WriteLine();
         Console.WriteLine("  Useful commands:");
         Console.WriteLine("    KeepAliveService.exe --check            Verify all settings");
