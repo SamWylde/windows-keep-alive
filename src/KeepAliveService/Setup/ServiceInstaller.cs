@@ -7,7 +7,7 @@ public static class ServiceInstaller
 {
     private const string ServiceName = "KeepAliveService";
     private const string DisplayName = "Keep Alive Watchdog";
-    private const string Description = "Prevents system sleep and keeps TeamViewer running. Part of windows-keep-alive.";
+    private const string Description = "Prevents system sleep and runs configured watchdogs. Part of windows-keep-alive.";
 
     public static bool Install()
     {

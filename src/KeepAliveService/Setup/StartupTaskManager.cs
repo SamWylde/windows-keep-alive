@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Principal;
 using KeepAliveService.Update;
 using Microsoft.Win32;
 
@@ -8,7 +9,7 @@ public static class StartupTaskManager
 {
     private const string TaskName = "WindowsKeepAlive";
 
-    public static bool EnsureTask()
+    public static bool EnsureTask(KeepAliveMode? mode = null)
     {
         Console.WriteLine();
         Console.WriteLine("=== Startup Task ===");
@@ -22,7 +23,9 @@ public static class StartupTaskManager
                 ConsoleOutput.Warning("Startup task will be created but may not work until the app is installed.");
             }
 
-            var taskUser = GetAutoLogonUser() ?? Environment.UserName;
+            var settings = AppSettings.Load();
+            var resolvedMode = mode ?? settings.GetOperationMode();
+            var taskUser = ResolveTaskUserForCreation(resolvedMode);
 
             // Use PowerShell Register-ScheduledTask to create a user-specific
             // logon trigger with Interactive logon type (no password required).
@@ -43,6 +46,8 @@ public static class StartupTaskManager
                 ConsoleOutput.Error("Failed to create startup scheduled task");
                 return false;
             }
+
+            TryPersistTaskUser(settings, taskUser);
 
             return true;
         }
@@ -99,7 +104,7 @@ public static class StartupTaskManager
     /// Validates that the startup task exists AND has the correct action (canonical exe path
     /// with --tray-startup), runs with highest privileges, and is bound to the expected user.
     /// </summary>
-    public static (bool exists, bool correct, string? detail) ValidateTask()
+    public static (bool exists, bool correct, string? detail) ValidateTask(KeepAliveMode? mode = null)
     {
         try
         {
@@ -137,12 +142,14 @@ public static class StartupTaskManager
                 return (true, false, "Task is not configured to run with highest privileges");
             }
 
-            // Verify the task principal matches the auto-logon user.
-            var expectedUser = GetAutoLogonUser();
+            // Verify the task principal matches the user this mode should launch for.
+            var settings = AppSettings.Load();
+            var resolvedMode = mode ?? settings.GetOperationMode();
+            var expectedUser = ResolveExpectedTaskUser(resolvedMode, settings);
             if (!string.IsNullOrWhiteSpace(expectedUser) &&
                 !output.Contains(expectedUser, StringComparison.OrdinalIgnoreCase))
             {
-                return (true, false, $"Task is not bound to auto-logon user '{expectedUser}'");
+                return (true, false, $"Task is not bound to expected user '{expectedUser}'");
             }
 
             return (true, true, null);
@@ -185,6 +192,56 @@ public static class StartupTaskManager
         catch
         {
             return null;
+        }
+    }
+
+    private static string ResolveTaskUserForCreation(KeepAliveMode mode)
+    {
+        return mode.UsesAutoLogin()
+            ? GetAutoLogonUser() ?? GetCurrentWindowsIdentityName()
+            : GetCurrentWindowsIdentityName();
+    }
+
+    private static string ResolveExpectedTaskUser(KeepAliveMode mode, AppSettings settings)
+    {
+        if (mode.UsesAutoLogin())
+        {
+            return GetAutoLogonUser()
+                   ?? settings.StartupTaskUser
+                   ?? GetCurrentWindowsIdentityName();
+        }
+
+        return settings.StartupTaskUser ?? GetCurrentWindowsIdentityName();
+    }
+
+    private static string GetCurrentWindowsIdentityName()
+    {
+        try
+        {
+            var name = WindowsIdentity.GetCurrent().Name;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+        catch
+        {
+            // Fall back below.
+        }
+
+        return Environment.UserName;
+    }
+
+    private static void TryPersistTaskUser(AppSettings settings, string taskUser)
+    {
+        try
+        {
+            settings.StartupTaskUser = taskUser;
+            settings.Save();
+        }
+        catch
+        {
+            // Best effort only; validation falls back to the current user.
         }
     }
 

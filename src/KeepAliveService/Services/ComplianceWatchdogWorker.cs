@@ -71,9 +71,11 @@ public class ComplianceWatchdogWorker : BackgroundService
             return;
         }
 
+        var mode = settings.GetOperationMode();
+
         // Skip startup task check: the watchdog runs as SYSTEM and cannot
         // create a correct user-session scheduled task.
-        var initialCompliance = ComplianceChecker.RunCheck(includeStartupTask: false);
+        var initialCompliance = ComplianceChecker.RunCheck(mode, includeStartupTask: false);
         if (initialCompliance == 0)
         {
             _consecutiveRemediationFailures = 0;
@@ -81,17 +83,31 @@ public class ComplianceWatchdogWorker : BackgroundService
             return;
         }
 
-        _logger.LogWarning("Compliance drift detected, applying remediation.");
+        _logger.LogWarning("Compliance drift detected in {Mode} mode, applying remediation.", mode);
 
-        var updatePolicyOk = TryApplyStep("Update policy", UpdatePolicyConfigurator.Configure);
-        var autoLoginOk = TryApplyStep("Auto-login non-credential settings", AutoLogonConfigurator.ApplyNonCredentialSettings);
+        var updatePolicyOk = true;
+        if (mode.UsesWindowsUpdatePolicy())
+        {
+            updatePolicyOk = TryApplyStep("Update policy", UpdatePolicyConfigurator.Configure);
+        }
+
+        var autoLoginOk = true;
+        if (mode.UsesAutoLogin())
+        {
+            autoLoginOk = TryApplyStep("Auto-login non-credential settings", AutoLogonConfigurator.ApplyNonCredentialSettings);
+        }
+
         var powerOk = TryApplyStep("Power settings", PowerConfigurator.Configure);
-        var networkOk = TryApplyStep("Network settings", NetworkConfigurator.Configure);
+        var networkOk = true;
+        if (mode.UsesNetworkHardening())
+        {
+            networkOk = TryApplyStep("Network settings", NetworkConfigurator.Configure);
+        }
         // NOTE: Startup task is NOT remediated here. The watchdog runs as SYSTEM,
         // which would create the task under the wrong principal. Only interactive
         // setup (running as the logged-in user) can create a proper user-session task.
 
-        var finalCompliance = ComplianceChecker.RunCheck(includeStartupTask: false);
+        var finalCompliance = ComplianceChecker.RunCheck(mode, includeStartupTask: false);
         if (finalCompliance == 0 && updatePolicyOk && autoLoginOk && powerOk && networkOk)
         {
             _consecutiveRemediationFailures = 0;

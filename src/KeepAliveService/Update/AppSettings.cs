@@ -27,6 +27,8 @@ public sealed class AppSettings
 
     public DateTime? SetupCompletedUtc { get; set; }
 
+    public string? OperationMode { get; set; } = KeepAliveMode.KeepAwakeOnly.ToSettingsValue();
+
     public string? SavedUsername { get; set; }
 
     public string? SavedAccountType { get; set; }
@@ -34,6 +36,8 @@ public sealed class AppSettings
     public string? SavedDomain { get; set; }
 
     public string? SavedPasswordEncrypted { get; set; }
+
+    public string? StartupTaskUser { get; set; }
 
     public Dictionary<string, string>? OriginalSettingsBackup { get; set; }
 
@@ -52,25 +56,40 @@ public sealed class AppSettings
         Directory.CreateDirectory(ToolsDirectory);
     }
 
-    public static AppSettings Load()
+    public static AppSettings Load(bool createIfMissing = true)
     {
-        EnsureDirectories();
+        if (createIfMissing)
+        {
+            EnsureDirectories();
+        }
 
         try
         {
             if (!File.Exists(SettingsPath))
             {
                 var defaults = new AppSettings();
-                defaults.Save();
+                if (createIfMissing)
+                {
+                    defaults.Save();
+                }
+
                 return defaults;
             }
 
             var json = File.ReadAllText(SettingsPath);
+            var hasOperationMode = HasJsonProperty(json, "operationMode");
             var parsed = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
             parsed.UpdateCheckIntervalHours = NormalizeInterval(parsed.UpdateCheckIntervalHours);
             if (string.IsNullOrWhiteSpace(parsed.InstallPath))
             {
                 parsed.InstallPath = new AppSettings().InstallPath;
+            }
+
+            if (!hasOperationMode || string.IsNullOrWhiteSpace(parsed.OperationMode))
+            {
+                parsed.SetOperationMode(parsed.SetupCompletedUtc != null
+                    ? KeepAliveMode.FullUnattended
+                    : KeepAliveMode.KeepAwakeOnly);
             }
 
             return parsed;
@@ -93,10 +112,11 @@ public sealed class AppSettings
         }
     }
 
-    public void Save()
+    public void Save(bool preserveConcurrentSetupState = true)
     {
         EnsureDirectories();
         UpdateCheckIntervalHours = NormalizeInterval(UpdateCheckIntervalHours);
+        OperationMode = GetOperationMode().ToSettingsValue();
 
         var acquired = false;
         try
@@ -120,7 +140,7 @@ public sealed class AppSettings
             // writes OriginalSettingsBackup and SetupCompletedUtc while the GUI holds a
             // stale in-memory instance). Without this, a GUI credential save would erase
             // the backup data written by setup.
-            if (File.Exists(SettingsPath))
+            if (preserveConcurrentSetupState && File.Exists(SettingsPath))
             {
                 try
                 {
@@ -130,6 +150,7 @@ public sealed class AppSettings
                     {
                         OriginalSettingsBackup ??= existing.OriginalSettingsBackup;
                         SetupCompletedUtc ??= existing.SetupCompletedUtc;
+                        StartupTaskUser ??= existing.StartupTaskUser;
                     }
                 }
                 catch
@@ -184,8 +205,35 @@ public sealed class AppSettings
         }
     }
 
+    public KeepAliveMode GetOperationMode()
+    {
+        var fallback = SetupCompletedUtc != null
+            ? KeepAliveMode.FullUnattended
+            : KeepAliveMode.KeepAwakeOnly;
+        return KeepAliveModeExtensions.ParseOrDefault(OperationMode, fallback);
+    }
+
+    public void SetOperationMode(KeepAliveMode mode)
+    {
+        OperationMode = mode.ToSettingsValue();
+    }
+
     private static int NormalizeInterval(int value)
     {
         return value <= 0 ? 24 : value;
+    }
+
+    private static bool HasJsonProperty(string json, string propertyName)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty(propertyName, out _);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

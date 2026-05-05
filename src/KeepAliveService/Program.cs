@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
+using KeepAliveService;
 using KeepAliveService.Native;
 using KeepAliveService.Services;
 using KeepAliveService.Setup;
@@ -44,7 +45,9 @@ internal static class Program
         switch (command)
         {
             case "--setup":
-                return SetupManager.RunSetup();
+                return TryParseSetupMode(args, KeepAliveMode.FullUnattended, out var setupMode)
+                    ? SetupManager.RunSetup(setupMode)
+                    : 1;
 
             case "--check":
                 return ComplianceChecker.RunCheck();
@@ -253,6 +256,7 @@ internal static class Program
 
     private static int RunServiceMode(string[] args)
     {
+        var mode = AppSettings.Load().GetOperationMode();
         var builder = Host.CreateApplicationBuilder(args);
 
         builder.Services.AddWindowsService(options =>
@@ -261,7 +265,11 @@ internal static class Program
         });
 
         builder.Services.AddHostedService<PowerKeepAliveWorker>();
-        builder.Services.AddHostedService<ProcessWatchdogWorker>();
+        if (mode.UsesRemoteAccessWatchdog())
+        {
+            builder.Services.AddHostedService<ProcessWatchdogWorker>();
+        }
+
         builder.Services.AddHostedService<ComplianceWatchdogWorker>();
 
         builder.Logging.AddEventLog(settings =>
@@ -273,6 +281,48 @@ internal static class Program
         var host = builder.Build();
         host.Run();
         return 0;
+    }
+
+    private static bool TryParseSetupMode(string[] args, KeepAliveMode defaultMode, out KeepAliveMode mode)
+    {
+        mode = defaultMode;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var arg = args[i];
+            string? rawMode = null;
+
+            if (arg.StartsWith("--mode=", StringComparison.OrdinalIgnoreCase))
+            {
+                rawMode = arg["--mode=".Length..];
+            }
+            else if (arg.Equals("--mode", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    Console.WriteLine("Missing value for --mode. Valid modes: keep-awake, remote, full.");
+                    return false;
+                }
+
+                rawMode = args[++i];
+            }
+            else
+            {
+                Console.WriteLine($"Unknown setup option '{arg}'. Valid usage: --setup [--mode keep-awake|remote|full].");
+                return false;
+            }
+
+            if (KeepAliveModeExtensions.TryParse(rawMode, out var parsed))
+            {
+                mode = parsed;
+                continue;
+            }
+
+            Console.WriteLine($"Unknown setup mode '{rawMode}'. Valid modes: keep-awake, remote, full.");
+            return false;
+        }
+
+        return true;
     }
 
     private static void AttachToParentConsole()
@@ -350,6 +400,9 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  KeepAliveService.exe --setup             First-time setup (run as Admin)");
+        Console.WriteLine("  KeepAliveService.exe --setup --mode keep-awake");
+        Console.WriteLine("  KeepAliveService.exe --setup --mode remote");
+        Console.WriteLine("  KeepAliveService.exe --setup --mode full");
         Console.WriteLine("  KeepAliveService.exe --check             Verify all settings are correct");
         Console.WriteLine("  KeepAliveService.exe --update-password   Update auto-login password");
         Console.WriteLine("  KeepAliveService.exe --restore           Restore original settings (keeps program installed)");

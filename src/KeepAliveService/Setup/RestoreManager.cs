@@ -92,7 +92,9 @@ public static class RestoreManager
             {
                 settings.SetupCompletedUtc = null;
                 settings.OriginalSettingsBackup = null;
-                settings.Save();
+                settings.StartupTaskUser = null;
+                settings.SetOperationMode(KeepAliveMode.KeepAwakeOnly);
+                settings.Save(preserveConcurrentSetupState: false);
                 return true;
             });
         }
@@ -121,6 +123,7 @@ public static class RestoreManager
         var settings = AppSettings.Load();
         var backup = settings.OriginalSettingsBackup;
         var hasBackup = backup is { Count: > 0 };
+        var restoreFailureCount = 0;
 
         // If settings were never restored, restore them first
         if (hasBackup || settings.SetupCompletedUtc != null)
@@ -138,6 +141,7 @@ public static class RestoreManager
             TryRun("Restore registry settings", () => RestoreRegistrySettings(backup!));
             TryRun("Restore network adapter settings", () => RestoreNetworkSettings(backup!));
             TryRun("Remove startup task", StartupTaskManager.RemoveTask);
+            restoreFailureCount = _failures;
         }
         else
         {
@@ -145,6 +149,7 @@ public static class RestoreManager
             TryRun("Stop KeepAlive service", StopService);
             TryRun("Remove KeepAlive service", RemoveService);
             TryRun("Remove startup task", StartupTaskManager.RemoveTask);
+            restoreFailureCount = _failures;
         }
 
         // Remove desktop shortcut
@@ -157,35 +162,94 @@ public static class RestoreManager
         // Remove installed EXE and program directory
         TryRun("Remove installed program files", () =>
         {
-            InstallManager.RemoveInstalledFiles();
-            return true;
+            return InstallManager.RemoveInstalledFiles();
         });
 
-        // Remove program data (settings, logs, tools)
-        TryRun("Remove program data", () =>
+        if (restoreFailureCount == 0)
         {
-            RemoveProgramData();
-            return true;
-        });
+            TryRun("Clear setup state", () =>
+            {
+                settings.SetupCompletedUtc = null;
+                settings.OriginalSettingsBackup = null;
+                settings.StartupTaskUser = null;
+                settings.SetOperationMode(KeepAliveMode.KeepAwakeOnly);
+                settings.Save(preserveConcurrentSetupState: false);
+                return true;
+            });
+
+            // Remove program data (settings, logs, tools)
+            TryRun("Remove program data", () =>
+            {
+                return RemoveProgramData();
+            });
+        }
+        else
+        {
+            ConsoleOutput.Warning("Skipping setup state and program data cleanup: settings restore did not complete. Backup preserved for retry.");
+        }
 
         PrintUninstallSummary();
         return _failures > 0 ? 1 : 0;
     }
 
-    private static void RemoveProgramData()
+    public static bool RestoreSettingsNotUsedByMode(
+        KeepAliveMode previousMode,
+        KeepAliveMode targetMode,
+        Dictionary<string, string>? backup)
+    {
+        if (backup is not { Count: > 0 })
+        {
+            ConsoleOutput.Warning("No original settings backup found. Using Windows defaults for mode downgrade cleanup.");
+            backup = new Dictionary<string, string>();
+        }
+
+        var ok = true;
+        var needsRegistryRestore =
+            (previousMode.UsesAutoLogin() && !targetMode.UsesAutoLogin()) ||
+            (previousMode.UsesWindowsUpdatePolicy() && !targetMode.UsesWindowsUpdatePolicy());
+        var needsNetworkRestore =
+            previousMode.UsesNetworkHardening() && !targetMode.UsesNetworkHardening();
+
+        if (!needsRegistryRestore && !needsNetworkRestore)
+        {
+            return true;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("=== Removing Settings Not Used By Selected Mode ===");
+
+        if (needsRegistryRestore)
+        {
+            ok &= RestoreRegistrySettings(backup);
+        }
+
+        if (needsNetworkRestore)
+        {
+            ok &= RestoreNetworkPowerSettings(backup, includeHeader: true);
+            ok &= RestoreNetworkSettings(backup);
+        }
+
+        return ok;
+    }
+
+    private static bool RemoveProgramData()
     {
         var programDataDir = AppSettings.ProgramDataDirectory;
-        if (Directory.Exists(programDataDir))
+        if (!Directory.Exists(programDataDir))
         {
-            try
-            {
-                Directory.Delete(programDataDir, recursive: true);
-                ConsoleOutput.Success($"Removed {programDataDir}");
-            }
-            catch (Exception ex)
-            {
-                ConsoleOutput.Warning($"Could not fully remove {programDataDir}: {ex.Message}");
-            }
+            return true;
+        }
+
+        try
+        {
+            Directory.Delete(programDataDir, recursive: true);
+            ConsoleOutput.Success($"Removed {programDataDir}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ConsoleOutput.Warning($"Could not fully remove {programDataDir}: {ex.Message}");
+            return false;
         }
     }
 
@@ -512,6 +576,21 @@ public static class RestoreManager
         ok &= RestorePowerCfgIndex(backup, "power.consolelock-dc",
             $"/setdcvalueindex SCHEME_CURRENT {subNone} {consoleLock}", "Sign-in after sleep (DC)", defaultValue: 1);
 
+        ok &= RestoreNetworkPowerSettings(backup, includeHeader: false);
+
+        return ok;
+    }
+
+    private static bool RestoreNetworkPowerSettings(Dictionary<string, string> backup, bool includeHeader)
+    {
+        if (includeHeader)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== Restoring Network Power Settings ===");
+        }
+
+        var ok = true;
+
         // WiFi power saving (default: 3 = Medium Power Saving)
         ok &= RestorePowerCfgIndex(backup, "power.wifi-powersave-ac",
             "/setacvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1 12bbebe6-58d6-4636-95bb-3217ef867c1a",
@@ -529,7 +608,7 @@ public static class RestoreManager
             "USB selective suspend (DC)", defaultValue: 1);
 
         // Flush all index changes to the kernel by re-activating the current scheme.
-        ok &= RunPowerCfg("/setactive SCHEME_CURRENT", "Activate power scheme to apply restored settings");
+        ok &= RunPowerCfg("/setactive SCHEME_CURRENT", "Activate power scheme to apply restored network settings");
 
         return ok;
     }
