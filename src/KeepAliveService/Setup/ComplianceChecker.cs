@@ -104,7 +104,7 @@ public static class ComplianceChecker
         if (includeStartupTask)
             CheckStartupTask(resolvedMode);
         else
-            _skipped.Add("Startup Task (user session only)");
+            _skipped?.Add("Startup Task (user session only)");
         if (resolvedMode.UsesRemoteAccessWatchdog())
             CheckTeamViewer();
         else
