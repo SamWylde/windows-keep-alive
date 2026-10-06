@@ -26,6 +26,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="KeepAliveService.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="assets\app.ico" />
   </ItemGroup>
 

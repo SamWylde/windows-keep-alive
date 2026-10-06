@@ -63,7 +63,7 @@ public static class StatusWriter
         return JsonSerializer.Serialize(doc, JsonOptions);
     }
 
-    /// <summary>Writes status.json atomically (temp file, then move). Never throws; returns false on failure.</summary>
+    /// <summary>Writes status.json atomically (temp file, then move). Never throws; returns false on failure. <paramref name="statusPathOverride"/> is for tests.</summary>
     public static bool Write(
         string state,
         KeepAliveMode mode,
@@ -71,11 +71,21 @@ public static class StatusWriter
         ComplianceReport? report,
         int remediationFailures,
         DateTime? cooldownUntilUtc,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        string? statusPathOverride = null)
     {
+        var statusPath = statusPathOverride ?? StatusPath;
         try
         {
-            AppSettings.EnsureDirectories();
+            if (statusPathOverride == null)
+            {
+                AppSettings.EnsureDirectories();
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(statusPath)!);
+            }
+
             var (installed, running) = ReadServiceState();
             var json = BuildJson(
                 state,
@@ -90,14 +100,14 @@ public static class StatusWriter
                 cooldownUntilUtc,
                 GetVersion());
 
-            var tempPath = StatusPath + ".tmp";
+            var tempPath = statusPath + ".tmp";
             File.WriteAllText(tempPath, json);
-            File.Move(tempPath, StatusPath, overwrite: true);
+            File.Move(tempPath, statusPath, overwrite: true);
             return true;
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Could not write {Path}", StatusPath);
+            logger?.LogWarning(ex, "Could not write {Path}", statusPath);
             return false;
         }
     }

@@ -251,7 +251,18 @@ public sealed class GitHubUpdateChecker : IDisposable
             return $"could not download the .sha256 asset ({ex.Message}).";
         }
 
-        var expected = ParseSha256File(text);
+        return await CompareSha256Async(text, exePath, cancellationToken);
+    }
+
+    /// <summary>Pure part of the check: null when <paramref name="sha256Text"/> names the SHA-256 of the file, otherwise the reason it was refused.</summary>
+    internal static async Task<string?> CompareSha256Async(string? sha256Text, string exePath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sha256Text))
+        {
+            return "the release has no .sha256 asset to verify the download against.";
+        }
+
+        var expected = ParseSha256File(sha256Text);
         if (expected == null)
         {
             return "the .sha256 asset is not in '<hex>  <file name>' format.";
