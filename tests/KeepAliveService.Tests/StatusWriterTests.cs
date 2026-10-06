@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using KeepAliveService.Services;
 using KeepAliveService.Setup;
@@ -98,5 +99,59 @@ public sealed class StatusWriterTests : IDisposable
         {
             Assert.DoesNotContain(word, text, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Theory]
+    [InlineData("th-TH")]
+    [InlineData("ar-SA")]
+    public void Timestamps_are_gregorian_ISO_under_non_gregorian_cultures(string culture)
+    {
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo(culture);
+            var observed = new DateTime(2026, 10, 5, 12, 30, 15, DateTimeKind.Utc);
+            StatusWriter.Write(StatusStates.Cooldown, KeepAliveMode.KeepAwakeOnly, observed, null, 3, observed.AddHours(6),
+                statusPathOverride: StatusFile);
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(StatusFile));
+            Assert.Equal("2026-10-05T12:30:15Z", doc.RootElement.GetProperty("observedUtc").GetString());
+            Assert.Equal("2026-10-05T18:30:15Z", doc.RootElement.GetProperty("cooldownUntilUtc").GetString());
+            Assert.StartsWith(DateTime.UtcNow.Year.ToString(CultureInfo.InvariantCulture),
+                doc.RootElement.GetProperty("writtenUtc").GetString());
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+    }
+
+    [Fact]
+    public void Exception_report_ignores_a_report_from_an_earlier_cycle()
+    {
+        var cycleStart = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
+        var stale = new ComplianceReport(cycleStart.AddHours(-6), 9, 4, 2, new[] { "Old failure" }, new[] { "Old skip" });
+
+        var report = ComplianceWatchdogWorker.BuildExceptionReport(new InvalidOperationException("x"), cycleStart, stale);
+
+        Assert.Equal(cycleStart, report.ObservedUtc);
+        Assert.Equal(0, report.Pass);
+        Assert.Equal(0, report.Fail);
+        Assert.Equal(new[] { "Compliance cycle threw InvalidOperationException" }, report.Failing);
+        Assert.Empty(report.Skipped);
+    }
+
+    [Fact]
+    public void Exception_report_keeps_partial_results_from_this_cycle()
+    {
+        var cycleStart = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
+        var partial = new ComplianceReport(cycleStart.AddSeconds(1), 3, 1, 0, new[] { "Sleep timeout" }, new[] { "Network" });
+
+        var report = ComplianceWatchdogWorker.BuildExceptionReport(new InvalidOperationException("x"), cycleStart, partial);
+
+        Assert.Equal(3, report.Pass);
+        Assert.Equal(1, report.Fail);
+        Assert.Equal(new[] { "Compliance cycle threw InvalidOperationException", "Sleep timeout" }, report.Failing);
+        Assert.Equal(new[] { "Network" }, report.Skipped);
     }
 }

@@ -44,14 +44,11 @@ public class ComplianceWatchdogWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in compliance watchdog cycle");
-                var partial = ComplianceChecker.LastReport;
-                var failing = new List<string> { $"Compliance cycle threw {ex.GetType().Name}" };
-                failing.AddRange(partial?.Failing ?? Array.Empty<string>());
                 StatusWriter.Write(
                     StatusStates.Exception,
                     _lastMode,
                     cycleStartUtc,
-                    new ComplianceReport(cycleStartUtc, partial?.Pass ?? 0, partial?.Fail ?? 0, partial?.Warn ?? 0, failing, partial?.Skipped ?? Array.Empty<string>()),
+                    BuildExceptionReport(ex, cycleStartUtc, ComplianceChecker.LastReport),
                     _consecutiveRemediationFailures,
                     CooldownOrNull(),
                     _logger);
@@ -68,6 +65,18 @@ public class ComplianceWatchdogWorker : BackgroundService
         }
 
         _logger.LogInformation("Compliance watchdog stopped");
+    }
+
+    /// <summary>
+    /// Report for a cycle that threw. Only results observed during this cycle are kept; a report left
+    /// over from an earlier cycle is ignored so it is not re-labelled with a fresh observation time.
+    /// </summary>
+    internal static ComplianceReport BuildExceptionReport(Exception ex, DateTime cycleStartUtc, ComplianceReport? lastReport)
+    {
+        var partial = lastReport is { } r && r.ObservedUtc >= cycleStartUtc ? r : null;
+        var failing = new List<string> { $"Compliance cycle threw {ex.GetType().Name}" };
+        failing.AddRange(partial?.Failing ?? Array.Empty<string>());
+        return new ComplianceReport(cycleStartUtc, partial?.Pass ?? 0, partial?.Fail ?? 0, partial?.Warn ?? 0, failing, partial?.Skipped ?? Array.Empty<string>());
     }
 
     private void RunComplianceCycle()

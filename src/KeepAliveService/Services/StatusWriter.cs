@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.ServiceProcess;
 using System.Text.Json;
 using KeepAliveService.Setup;
@@ -113,7 +114,7 @@ public static class StatusWriter
     }
 
     private static string Iso(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+        DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
     private static string GetVersion() =>
         System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";

@@ -32,6 +32,8 @@ public static class ComplianceChecker
 
     public static int RunCheck(KeepAliveMode? mode = null, bool includeStartupTask = true)
     {
+        // A report from an earlier run must never be mistaken for this run's.
+        _lastReport = null;
         _passCount = 0;
         _failCount = 0;
         _warnCount = 0;
@@ -49,6 +51,32 @@ public static class ComplianceChecker
         Console.WriteLine("========================================");
         Console.WriteLine($"  Mode: {resolvedMode.ToDisplayName()}");
 
+        try
+        {
+            RunChecks(resolvedMode, includeStartupTask);
+        }
+        catch
+        {
+            // Keep this run's partial results available to the caller's exception status.
+            _lastReport = new ComplianceReport(observedUtc, _passCount, _failCount, _warnCount, _failing.ToArray(), _skipped.ToArray());
+            throw;
+        }
+
+        _lastReport = new ComplianceReport(observedUtc, _passCount, _failCount, _warnCount, _failing.ToArray(), _skipped.ToArray());
+
+        Console.WriteLine();
+        Console.WriteLine("========================================");
+        Console.ForegroundColor = _failCount == 0 ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine($"  Results: {_passCount} passed, {_failCount} failed, {_warnCount} warnings");
+        Console.ResetColor();
+        Console.WriteLine("========================================");
+        Console.WriteLine();
+
+        return _failCount == 0 ? 0 : 1;
+    }
+
+    private static void RunChecks(KeepAliveMode resolvedMode, bool includeStartupTask)
+    {
         CheckWindowsEdition();
         if (resolvedMode.UsesWindowsUpdatePolicy())
             CheckUpdatePolicy();
@@ -81,18 +109,6 @@ public static class ComplianceChecker
             CheckTeamViewer();
         else
             SkipSection("TeamViewer", "Not enabled in this mode.");
-
-        _lastReport = new ComplianceReport(observedUtc, _passCount, _failCount, _warnCount, _failing.ToArray(), _skipped.ToArray());
-
-        Console.WriteLine();
-        Console.WriteLine("========================================");
-        Console.ForegroundColor = _failCount == 0 ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine($"  Results: {_passCount} passed, {_failCount} failed, {_warnCount} warnings");
-        Console.ResetColor();
-        Console.WriteLine("========================================");
-        Console.WriteLine();
-
-        return _failCount == 0 ? 0 : 1;
     }
 
     private static void CheckWindowsEdition()
