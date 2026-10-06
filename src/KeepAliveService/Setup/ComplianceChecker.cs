@@ -5,8 +5,24 @@ using Microsoft.Win32;
 
 namespace KeepAliveService.Setup;
 
+/// <summary>Result of one compliance check, kept for the status writer.</summary>
+public sealed record ComplianceReport(
+    DateTime ObservedUtc,
+    int Pass,
+    int Fail,
+    int Warn,
+    IReadOnlyList<string> Failing,
+    IReadOnlyList<string> Skipped);
+
 public static class ComplianceChecker
 {
+    [ThreadStatic] private static List<string>? _failing;
+    [ThreadStatic] private static List<string>? _skipped;
+
+    /// <summary>The report from the last <see cref="RunCheck"/> on the calling thread.</summary>
+    public static ComplianceReport? LastReport => _lastReport;
+    [ThreadStatic] private static ComplianceReport? _lastReport;
+
     [ThreadStatic] private static int _passCount;
     [ThreadStatic] private static int _failCount;
     [ThreadStatic] private static int _warnCount;
@@ -22,6 +38,9 @@ public static class ComplianceChecker
         _isHomeOrCore = false;
         _isWindows10 = false;
         _isWindows11 = false;
+        _failing = new List<string>();
+        _skipped = new List<string>();
+        var observedUtc = DateTime.UtcNow;
         var resolvedMode = mode ?? AppSettings.Load().GetOperationMode();
 
         Console.WriteLine();
@@ -54,11 +73,16 @@ public static class ComplianceChecker
             SkipSection("Network", "Not enabled in this mode.");
 
         CheckService();
-        if (includeStartupTask) CheckStartupTask(resolvedMode);
+        if (includeStartupTask)
+            CheckStartupTask(resolvedMode);
+        else
+            _skipped.Add("Startup Task (user session only)");
         if (resolvedMode.UsesRemoteAccessWatchdog())
             CheckTeamViewer();
         else
             SkipSection("TeamViewer", "Not enabled in this mode.");
+
+        _lastReport = new ComplianceReport(observedUtc, _passCount, _failCount, _warnCount, _failing.ToArray(), _skipped.ToArray());
 
         Console.WriteLine();
         Console.WriteLine("========================================");
@@ -683,6 +707,7 @@ public static class ComplianceChecker
     private static void Fail(string message)
     {
         _failCount++;
+        _failing?.Add(message);
         Console.ForegroundColor = ConsoleColor.Red;
         Console.Write("  [FAIL] ");
         Console.ResetColor();
@@ -700,6 +725,7 @@ public static class ComplianceChecker
 
     private static void SkipSection(string sectionName, string message)
     {
+        _skipped?.Add(sectionName);
         Console.WriteLine();
         Console.WriteLine($"--- {sectionName} ---");
         Console.ForegroundColor = ConsoleColor.Cyan;

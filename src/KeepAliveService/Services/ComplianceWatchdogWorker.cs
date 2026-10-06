@@ -13,6 +13,8 @@ public class ComplianceWatchdogWorker : BackgroundService
 
     private int _consecutiveRemediationFailures;
     private DateTime _cooldownUntilUtc = DateTime.MinValue;
+    private int _failuresAtCooldown;
+    private KeepAliveMode _lastMode = KeepAliveMode.KeepAwakeOnly;
 
     public ComplianceWatchdogWorker(ILogger<ComplianceWatchdogWorker> logger)
     {
@@ -34,6 +36,7 @@ public class ComplianceWatchdogWorker : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            var cycleStartUtc = DateTime.UtcNow;
             try
             {
                 RunComplianceCycle();
@@ -41,6 +44,17 @@ public class ComplianceWatchdogWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in compliance watchdog cycle");
+                var partial = ComplianceChecker.LastReport;
+                var failing = new List<string> { $"Compliance cycle threw {ex.GetType().Name}" };
+                failing.AddRange(partial?.Failing ?? Array.Empty<string>());
+                StatusWriter.Write(
+                    StatusStates.Exception,
+                    _lastMode,
+                    cycleStartUtc,
+                    new ComplianceReport(cycleStartUtc, partial?.Pass ?? 0, partial?.Fail ?? 0, partial?.Warn ?? 0, failing, partial?.Skipped ?? Array.Empty<string>()),
+                    _consecutiveRemediationFailures,
+                    CooldownOrNull(),
+                    _logger);
             }
 
             try
@@ -58,20 +72,26 @@ public class ComplianceWatchdogWorker : BackgroundService
 
     private void RunComplianceCycle()
     {
-        if (DateTime.UtcNow < _cooldownUntilUtc)
-        {
-            _logger.LogDebug("Compliance watchdog cooldown active until {CooldownUntilUtc}", _cooldownUntilUtc);
-            return;
-        }
-
         var settings = AppSettings.Load();
+        var mode = settings.GetOperationMode();
+        _lastMode = mode;
+
         if (settings.SetupCompletedUtc == null)
         {
             _logger.LogDebug("Skipping compliance watchdog: setup has not been completed yet.");
+            StatusWriter.Write(StatusStates.SetupIncomplete, mode, DateTime.UtcNow, null, 0, null, _logger);
             return;
         }
 
-        var mode = settings.GetOperationMode();
+        if (DateTime.UtcNow < _cooldownUntilUtc)
+        {
+            _logger.LogDebug("Compliance watchdog cooldown active until {CooldownUntilUtc}", _cooldownUntilUtc);
+            // Read-only check so the report keeps a fresh observation; no remediation runs during cooldown.
+            ComplianceChecker.RunCheck(mode, includeStartupTask: false);
+            var cooldownReport = ComplianceChecker.LastReport;
+            StatusWriter.Write(StatusStates.Cooldown, mode, cooldownReport?.ObservedUtc ?? DateTime.UtcNow, cooldownReport, _failuresAtCooldown, _cooldownUntilUtc, _logger);
+            return;
+        }
 
         // Skip startup task check: the watchdog runs as SYSTEM and cannot
         // create a correct user-session scheduled task.
@@ -80,6 +100,7 @@ public class ComplianceWatchdogWorker : BackgroundService
         {
             _consecutiveRemediationFailures = 0;
             _logger.LogDebug("Compliance watchdog check complete: all settings are compliant.");
+            WriteResult(StatusStates.Ok, mode);
             return;
         }
 
@@ -112,6 +133,7 @@ public class ComplianceWatchdogWorker : BackgroundService
         {
             _consecutiveRemediationFailures = 0;
             _logger.LogInformation("Compliance remediation completed successfully.");
+            WriteResult(StatusStates.Ok, mode);
             return;
         }
 
@@ -140,8 +162,29 @@ public class ComplianceWatchdogWorker : BackgroundService
                 "Compliance remediation failed {FailureCount} consecutive times. Entering cooldown until {CooldownUntilUtc}. Re-run setup from the GUI as Administrator.",
                 _consecutiveRemediationFailures,
                 _cooldownUntilUtc);
+            _failuresAtCooldown = _consecutiveRemediationFailures;
             _consecutiveRemediationFailures = 0;
+            WriteResult(StatusStates.Cooldown, mode, _failuresAtCooldown);
+            return;
         }
+
+        WriteResult(StatusStates.Failing, mode);
+    }
+
+    private DateTime? CooldownOrNull() =>
+        DateTime.UtcNow < _cooldownUntilUtc ? _cooldownUntilUtc : null;
+
+    private void WriteResult(string state, KeepAliveMode mode, int? remediationFailures = null)
+    {
+        var report = ComplianceChecker.LastReport;
+        StatusWriter.Write(
+            state,
+            mode,
+            report?.ObservedUtc ?? DateTime.UtcNow,
+            report,
+            remediationFailures ?? _consecutiveRemediationFailures,
+            CooldownOrNull(),
+            _logger);
     }
 
     private bool TryApplyStep(string stepName, Func<bool> action)

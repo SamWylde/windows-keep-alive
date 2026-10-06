@@ -14,7 +14,7 @@ Keep a Windows laptop awake, or turn it into a more complete unattended remote-a
 - **Auto-login configuration** - optional full mode sets up automatic sign-in so the machine recovers from reboots unattended
 - **TeamViewer watchdog** - optional remote/full modes monitor TeamViewer and restart it if it stops
 - **Compliance watchdog** - periodically verifies all settings and auto-remediates drift
-- **Auto-updates** - checks GitHub releases every 24 hours and applies in-place EXE updates
+- **Auto-updates** - checks GitHub releases every 24 hours and applies in-place EXE updates, after verifying the download against the release's `.sha256` asset
 - **Full restore** - backs up original settings before setup; one-click rollback to undo everything
 - **Modern Fluent Design GUI** - WPF interface with Mica backdrop and tabbed layout
 - **Windows 10 & 11 support** - Home, Pro, Enterprise, and Education editions
@@ -79,9 +79,25 @@ The service always runs the keep-awake and compliance workers. The TeamViewer wa
 
 | Worker | Interval | Purpose |
 |--------|----------|---------|
-| **PowerKeepAlive** | Held continuously | Uses `PowerCreateRequest` / `PowerSetRequest` to prevent sleep, with `SetThreadExecutionState` fallback |
+| **PowerKeepAlive** | Held continuously, re-asserted every 5 min | Uses `PowerCreateRequest` / `PowerSetRequest` to prevent sleep, with `SetThreadExecutionState` fallback |
 | **ProcessWatchdog** | 30 sec | Checks if TeamViewer is running, restarts if not |
 | **ComplianceWatchdog** | 6 hrs | Verifies settings haven't drifted, auto-remediates |
+
+## status.json
+
+After every compliance cycle the service writes `C:\ProgramData\WindowsKeepAlive\status.json` (written to a temp file, then moved into place). It holds no secrets and nothing from `settings.json` except the mode.
+
+```json
+{"schema":1,"version":"1.10.0","mode":"full-unattended","writtenUtc":"...","observedUtc":"...",
+ "state":"ok","pass":8,"fail":0,"warn":3,"failing":[],"skipped":["Startup Task (user session only)"],
+ "serviceInstalled":true,"serviceRunning":true,"autoLoginConfigured":true,
+ "remediationFailures":0,"cooldownUntilUtc":null}
+```
+
+- `state` is `ok`, `failing` (remediation did not fix it), `exception`, `cooldown` (24 h pause after 3 failed remediations; the check still runs, nothing is remediated) or `setup-incomplete`.
+- `observedUtc` is when the check ran; `writtenUtc` is when the file was written.
+- `skipped` lists checks that did not run, such as the user startup task (the service runs as SYSTEM and skips it) and sections the mode does not use.
+- A reader should treat the file as stale when `observedUtc` is more than 13 hours old (the check runs every 6 hours). A missing file means Keep Alive is not installed.
 
 ## CLI
 

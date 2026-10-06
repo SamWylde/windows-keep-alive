@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -88,6 +89,7 @@ public sealed class GitHubUpdateChecker : IDisposable
 
             var latestVersion = ParseTagVersion(tag);
             var (assetName, downloadUrl) = SelectExeAsset(root);
+            var sha256Url = SelectSha256AssetUrl(root, assetName);
 
             _settings.LastUpdateCheckUtc = nowUtc;
             _settings.Save();
@@ -127,7 +129,8 @@ public sealed class GitHubUpdateChecker : IDisposable
                 ReleaseNotes: body,
                 DownloadUrl: downloadUrl,
                 AssetName: assetName,
-                Message: message);
+                Message: message,
+                Sha256Url: sha256Url);
         }
         catch (Exception ex)
         {
@@ -164,6 +167,13 @@ public sealed class GitHubUpdateChecker : IDisposable
 
             var tempExe = Path.Combine(Path.GetTempPath(), $"KeepAliveService_update_{Guid.NewGuid():N}.exe");
             await DownloadFileAsync(update.DownloadUrl, tempExe, progress, cancellationToken);
+
+            var hashError = await VerifySha256Async(update, tempExe, cancellationToken);
+            if (hashError != null)
+            {
+                try { File.Delete(tempExe); } catch { }
+                return new UpdateApplyResult(false, $"Update refused: {hashError}");
+            }
 
             if (!IsValidPortableExecutable(tempExe))
             {
@@ -221,6 +231,70 @@ public sealed class GitHubUpdateChecker : IDisposable
         }
 
         progress?.Report(new DownloadProgress(totalRead, totalBytes));
+    }
+
+    /// <summary>Returns null when the EXE matches the release's .sha256 asset, otherwise the reason it was refused.</summary>
+    private async Task<string?> VerifySha256Async(UpdateCheckResult update, string exePath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(update.Sha256Url))
+        {
+            return "the release has no .sha256 asset to verify the download against.";
+        }
+
+        string text;
+        try
+        {
+            text = await _httpClient.GetStringAsync(update.Sha256Url, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return $"could not download the .sha256 asset ({ex.Message}).";
+        }
+
+        var expected = ParseSha256File(text);
+        if (expected == null)
+        {
+            return "the .sha256 asset is not in '<hex>  <file name>' format.";
+        }
+
+        string actual;
+        await using (var stream = File.OpenRead(exePath))
+        {
+            actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+        }
+
+        return actual.Equals(expected, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : "the downloaded file's SHA-256 does not match the release's .sha256 asset.";
+    }
+
+    /// <summary>Reads the first token of a sha256sum-style file; null unless it is 64 hex characters.</summary>
+    internal static string? ParseSha256File(string text)
+    {
+        var token = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return token is { Length: 64 } && token.All(Uri.IsHexDigit) ? token : null;
+    }
+
+    private static string? SelectSha256AssetUrl(JsonElement root, string? exeAssetName)
+    {
+        if (exeAssetName == null
+            || !root.TryGetProperty("assets", out var assets)
+            || assets.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+            if (name != null && name.Equals(exeAssetName + ".sha256", StringComparison.OrdinalIgnoreCase)
+                && asset.TryGetProperty("browser_download_url", out var urlProp))
+            {
+                return urlProp.GetString();
+            }
+        }
+
+        return null;
     }
 
     private static bool IsValidPortableExecutable(string filePath)
@@ -386,7 +460,8 @@ public sealed record UpdateCheckResult(
     string? ReleaseNotes,
     string? DownloadUrl,
     string? AssetName,
-    string Message);
+    string Message,
+    string? Sha256Url = null);
 
 public sealed record UpdateApplyResult(
     bool Started,
