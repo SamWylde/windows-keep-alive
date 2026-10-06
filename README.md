@@ -150,3 +150,17 @@ dotnet publish src/KeepAliveService/KeepAliveService.csproj `
 ```
 
 Requires [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+### Publishing a release
+
+From v1.10.0 every release must attach **both** assets, or v1.10.0+ installs refuse to update:
+
+- `KeepAliveService.exe`
+- `KeepAliveService.exe.sha256`
+
+The `.sha256` file is one line: `<64 lowercase hex characters>  KeepAliveService.exe` (two spaces between the hash and the name).
+
+```powershell
+Get-FileHash KeepAliveService.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  KeepAliveService.exe" } | Set-Content -Encoding ascii KeepAliveService.exe.sha256
+gh release create vX.Y.Z KeepAliveService.exe KeepAliveService.exe.sha256 -F <notes-file>
+```
